@@ -3,7 +3,7 @@ import type { ReviseMode, ReviseOutput } from "../agents/reviser.js";
 import type { WriteChapterOutput } from "../agents/writer.js";
 import type { ChapterIntent, ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
 import type { LengthSpec } from "../models/length-governance.js";
-import { countChapterLength, isOutsideSoftRange } from "../utils/length-metrics.js";
+import { countChapterLength, isOutsideHardRange } from "../utils/length-metrics.js";
 
 export interface ChapterReviewCycleUsage {
   readonly promptTokens: number;
@@ -30,7 +30,7 @@ export interface ChapterReviewCycleResult {
   readonly normalizeApplied: boolean;
 }
 
-const MAX_REVIEW_ITERATIONS = 3;
+const MAX_REVIEW_ITERATIONS = 1;
 const PASS_SCORE_THRESHOLD = 85;
 const NET_IMPROVEMENT_EPSILON = 3;
 
@@ -118,31 +118,24 @@ export async function runChapterReviewCycle(params: {
   }));
 
   // ---------------------------------------------------------------------------
-  // Length normalization: dedicated step, runs until in softRange (max 2 passes)
+  // Length normalization: dedicated step, only runs for clear hard-range drift.
   // Length is NOT mixed into the reviser's issues — normalize handles it.
   // ---------------------------------------------------------------------------
-  const normalizeUntilInRange = async (content: string): Promise<{
+  const normalizeIfHardDrift = async (content: string): Promise<{
     content: string;
     wordCount: number;
     applied: boolean;
   }> => {
-    let current = content;
-    let applied = false;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const wc = countChapterLength(current, params.lengthSpec.countingMode);
-      if (!isOutsideSoftRange(wc, params.lengthSpec)) {
-        return { content: current, wordCount: wc, applied };
-      }
-      const result = await params.normalizeDraftLengthIfNeeded(current);
-      totalUsage = params.addUsage(totalUsage, result.tokenUsage);
-      current = result.content;
-      applied = applied || result.applied;
+    const wordCount = countChapterLength(content, params.lengthSpec.countingMode);
+    if (!isOutsideHardRange(wordCount, params.lengthSpec)) {
+      return { content, wordCount, applied: false };
     }
-    const finalWc = countChapterLength(current, params.lengthSpec.countingMode);
-    return { content: current, wordCount: finalWc, applied };
+    const result = await params.normalizeDraftLengthIfNeeded(content);
+    totalUsage = params.addUsage(totalUsage, result.tokenUsage);
+    return result;
   };
 
-  const normalizedBeforeAudit = await normalizeUntilInRange(finalContent);
+  const normalizedBeforeAudit = await normalizeIfHardDrift(finalContent);
   finalContent = params.normalizePostWriteSurface?.(normalizedBeforeAudit.content) ?? normalizedBeforeAudit.content;
   finalWordCount = countChapterLength(finalContent, params.lengthSpec.countingMode);
   normalizeApplied = normalizeApplied || normalizedBeforeAudit.applied;
@@ -169,7 +162,7 @@ export async function runChapterReviewCycle(params: {
     const sensitiveResult = params.analyzeSensitiveWords(content);
     const hasBlockedWords = sensitiveResult.found.some((item) => item.severity === "block");
     const wordCount = countChapterLength(content, params.lengthSpec.countingMode);
-    const lengthInRange = !isOutsideSoftRange(wordCount, params.lengthSpec);
+    const lengthInRange = !isOutsideHardRange(wordCount, params.lengthSpec);
 
     // Deterministic post-write checks: run every round, not just the first.
     // If runPostWriteChecks is provided, use it; otherwise fall back to initial postWriteErrors.
@@ -204,7 +197,7 @@ export async function runChapterReviewCycle(params: {
     assessment.auditResult.passed && assessment.score >= PASS_SCORE_THRESHOLD && assessment.lengthInRange;
 
   // ---------------------------------------------------------------------------
-  // Scoring loop: assess → revise → assess, max 3 iterations, pick best
+  // Scoring loop: assess → revise → assess, one automatic repair pass max.
   // ---------------------------------------------------------------------------
   params.logStage({ zh: "审计草稿", en: "auditing draft" });
   const initial = await assess(finalContent);
@@ -311,7 +304,7 @@ export async function runChapterReviewCycle(params: {
     currentAudit = {
       auditResult: bestSnapshot.auditResult,
       score: bestSnapshot.score,
-      lengthInRange: !isOutsideSoftRange(bestSnapshot.wordCount, params.lengthSpec),
+      lengthInRange: !isOutsideHardRange(bestSnapshot.wordCount, params.lengthSpec),
     };
   }
 

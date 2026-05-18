@@ -16,6 +16,7 @@ import { ReviserAgent, type ReviseOutput } from "../agents/reviser.js";
 import { ChapterAnalyzerAgent } from "../agents/chapter-analyzer.js";
 import { StateValidatorAgent } from "../agents/state-validator.js";
 import { FoundationReviewerAgent } from "../agents/foundation-reviewer.js";
+import { PolisherAgent } from "../agents/polisher.js";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { MemoryDB } from "../state/memory-db.js";
@@ -2039,6 +2040,41 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("does not normalize minor soft-range length drift", async () => {
+    const { root, runner, bookId } = await createRunnerFixture();
+    const nearTargetDraft = "近".repeat(260);
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({
+        chapterNumber: 1,
+        content: nearTargetDraft,
+        wordCount: nearTargetDraft.length,
+      }),
+    );
+    const normalizeChapter = vi.mocked(
+      LengthNormalizerAgent.prototype.normalizeChapter,
+    );
+    const auditChapter = vi.spyOn(
+      ContinuityAuditor.prototype,
+      "auditChapter",
+    ).mockResolvedValue(
+      createAuditResult({
+        passed: true,
+        issues: [],
+        summary: "clean",
+      }),
+    );
+
+    try {
+      await runner.writeNextChapter(bookId, 220);
+
+      expect(normalizeChapter).not.toHaveBeenCalled();
+      expect(auditChapter.mock.calls[0]?.[1]).toBe(nearTargetDraft);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes short writer output once before audit", async () => {
     const { root, runner, bookId } = await createRunnerFixture();
     const shortDraft = "短句。".repeat(20);
@@ -2303,6 +2339,89 @@ describe("PipelineRunner", () => {
     expect(reviseChapter.mock.calls[0]?.[4]).toBe("auto");
 
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("runs at most one automatic repair iteration during writeNextChapter", async () => {
+    const { root, runner, bookId } = await createRunnerFixture();
+    const draftBody = "甲".repeat(220);
+    const revisedBody = "乙".repeat(220);
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({
+        content: draftBody,
+        wordCount: draftBody.length,
+      }),
+    );
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 40,
+        issues: [CRITICAL_ISSUE],
+        summary: "needs repair",
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 50,
+        issues: [CRITICAL_ISSUE],
+        summary: "still weak",
+      }))
+      .mockResolvedValueOnce(createAuditResult({
+        passed: false,
+        overallScore: 60,
+        issues: [CRITICAL_ISSUE],
+        summary: "should not be reached",
+      }));
+    const reviseChapter = vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({
+        revisedContent: revisedBody,
+        wordCount: revisedBody.length,
+      }),
+    );
+    vi.spyOn(ChapterAnalyzerAgent.prototype, "analyzeChapter").mockResolvedValue(
+      createAnalyzedOutput({
+        content: revisedBody,
+        wordCount: revisedBody.length,
+      }),
+    );
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+
+      expect(result.status).toBe("audit-failed");
+      expect(auditChapter).toHaveBeenCalledTimes(2);
+      expect(reviseChapter).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not run the prose polisher automatically after a passing write", async () => {
+    const { root, runner, bookId } = await createRunnerFixture();
+    const draftBody = "林".repeat(220);
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({
+        content: draftBody,
+        wordCount: draftBody.length,
+      }),
+    );
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({
+        passed: true,
+        issues: [],
+        summary: "clean",
+        overallScore: 90,
+      }),
+    );
+    const polishChapter = vi.spyOn(PolisherAgent.prototype, "polishChapter");
+
+    try {
+      await runner.writeNextChapter(bookId, 220);
+
+      expect(polishChapter).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("persists truth files derived from the final revised chapter", async () => {

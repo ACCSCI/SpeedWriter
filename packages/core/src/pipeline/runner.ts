@@ -29,7 +29,7 @@ import type { AuditResult, AuditIssue } from "../agents/continuity.js";
 import type { RadarResult } from "../agents/radar.js";
 import type { LengthSpec, LengthTelemetry } from "../models/length-governance.js";
 import type { ChapterMemo, ContextPackage, RuleStack } from "../models/input-governance.js";
-import { buildLengthSpec, countChapterLength, formatLengthCount, isOutsideHardRange, isOutsideSoftRange, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
+import { buildLengthSpec, countChapterLength, formatLengthCount, isOutsideHardRange, resolveLengthCountingMode, type LengthLanguage } from "../utils/length-metrics.js";
 import { analyzeLongSpanFatigue } from "../utils/long-span-fatigue.js";
 import { buildWritingMethodologySection } from "../utils/writing-methodology.js";
 import {
@@ -1609,37 +1609,7 @@ export class PipelineRunner {
     const postReviseCount = reviewResult.postReviseCount;
     const normalizeApplied = reviewResult.normalizeApplied;
 
-    // 3b. File-layer polish pass — runs AFTER structural audit accepts the
-    // chapter. Polisher only touches sentence craft / paragraph shape /
-    // wording / sensory detail / dialogue naturalness. Plot / character /
-    // mainline stay frozen. Skipped when audit did not produce a passing
-    // chapter (leave the failing draft visible for the next cycle) or when
-    // length is dangerously off-range (normalize should handle it, not polish).
-    if (auditResult.passed) {
-      try {
-        const { PolisherAgent } = await import("../agents/polisher.js");
-        const polisher = new PolisherAgent(this.agentCtxFor("polisher", bookId));
-        this.logStage(stageLanguage, { zh: "文字层润色", en: "polishing prose" });
-        const polishOutput = await polisher.polishChapter({
-          chapterContent: finalContent,
-          chapterNumber,
-          chapterMemo: reducedControlInput?.chapterMemo,
-          language: pipelineLang === "en" ? "en" : "zh",
-        });
-        totalUsage = PipelineRunner.addUsage(totalUsage, polishOutput.tokenUsage);
-        if (polishOutput.changed && polishOutput.polishedContent.trim().length > 0) {
-          finalContent = normalizePostWriteSurface(polishOutput.polishedContent, pipelineLang);
-          finalWordCount = countChapterLength(finalContent, lengthSpec.countingMode);
-        }
-      } catch (error) {
-        this.logWarn(pipelineLang, {
-          zh: `润色阶段失败：${error instanceof Error ? error.message : String(error)}`,
-          en: `polish stage failed: ${error instanceof Error ? error.message : String(error)}`,
-        });
-      }
-    }
-
-    // 3c. Lightweight per-chapter promotion pass — check if any hooks should
+    // 3b. Lightweight per-chapter promotion pass — check if any hooks should
     // be promoted based on advanced_count derived from chapter_summaries.
     // Runs BEFORE persistence so the reviewer of the NEXT chapter sees the
     // updated ledger. No LLM calls — pure ledger parse + threshold check.
@@ -2856,7 +2826,7 @@ ${matrix}`,
       params.chapterContent,
       params.lengthSpec.countingMode,
     );
-    if (!isOutsideSoftRange(writerCount, params.lengthSpec)) {
+    if (!isOutsideHardRange(writerCount, params.lengthSpec)) {
       return {
         content: params.chapterContent,
         wordCount: writerCount,
