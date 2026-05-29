@@ -113,6 +113,14 @@ describe("agent play tools", () => {
     });
   });
 
+  it("uses the player-chosen playMode for the world, overriding the tool param", async () => {
+    const sessionId = "1700000000000-cccc03";
+    const tool = createPlayStartTool(root, sessionId, "guided");
+    await tool.execute("tc-mode", { title: "选项局", initialScene: "开场。" });
+    const store = new PlayStore(root);
+    await expect(store.loadWorld(sessionId)).resolves.toMatchObject({ mode: "guided" });
+  });
+
   it("advances each session's own world, not the most recently created one", async () => {
     // Regression: play_step used to pick the globally newest world, so two
     // concurrent play sessions would advance each other's world. The world is

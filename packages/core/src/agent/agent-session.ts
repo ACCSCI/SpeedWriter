@@ -45,6 +45,8 @@ export interface AgentSessionConfig {
   bookId: string | null;
   /** Studio conversation surface. Used to narrow the visible tools. */
   sessionKind?: SessionKind;
+  /** Play interaction mode chosen by the player at launch (guided = choice-only, open = free text). */
+  playMode?: "open" | "guided";
   /** Language for the system prompt. */
   language: string;
   /** PipelineRunner for sub-agent tool delegation. */
@@ -483,6 +485,7 @@ function createAgentToolsForMode(params: {
   readonly projectRoot: string;
   readonly allowSystemFileRead: boolean;
   readonly language: string;
+  readonly playMode?: "open" | "guided";
 }) {
   const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot);
 
@@ -499,7 +502,7 @@ function createAgentToolsForMode(params: {
 
   if (params.sessionKind === "play") {
     return [
-      createPlayStartTool(params.projectRoot, params.sessionId),
+      createPlayStartTool(params.projectRoot, params.sessionId, params.playMode),
       createPlayStepTool(params.pipeline, params.projectRoot, params.sessionId),
     ];
   }
@@ -560,6 +563,7 @@ async function runAgentSessionUnlocked(
   // a spurious cache eviction because `null !== undefined`.
   const bookId: string | null = config.bookId ? assertSafeBookId(config.bookId) : null;
   const sessionKind: SessionKind = config.sessionKind ?? (bookId ? "book" : "chat");
+  const playMode = config.playMode;
   const model = resolveModel(config.model);
   const requestedModelIdentity = agentModelIdentity(model);
   const allowSystemFileRead = config.allowSystemFileRead ?? envFlagEnabled(process.env.INKOS_AGENT_ALLOW_SYSTEM_READ, false);
@@ -616,7 +620,7 @@ async function runAgentSessionUnlocked(
       initialState: {
         model,
         systemPrompt: buildAgentSystemPrompt(bookId, language, sessionKind),
-        tools: createAgentToolsForMode({ pipeline, bookId, sessionId, sessionKind, projectRoot, allowSystemFileRead, language }),
+        tools: createAgentToolsForMode({ pipeline, bookId, sessionId, sessionKind, projectRoot, allowSystemFileRead, language, playMode }),
         messages: initialAgentMessages,
       },
       transformContext: createBookContextTransform(bookId, projectRoot),

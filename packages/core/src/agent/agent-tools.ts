@@ -594,6 +594,7 @@ type PlayStartParamsType = Static<typeof PlayStartParams>;
 export function createPlayStartTool(
   projectRoot: string,
   sessionId: string,
+  playMode?: "open" | "guided",
 ): AgentTool<typeof PlayStartParams> {
   return {
     name: "play_start",
@@ -619,7 +620,7 @@ export function createPlayStartTool(
         id: worldId,
         title: params.title.trim(),
         premise: params.premise?.trim() ?? "",
-        mode: params.mode ?? "open",
+        mode: playMode ?? params.mode ?? "open",
       });
       await store.ensureRun(world.id, runId);
 
@@ -654,7 +655,6 @@ export function createPlayStartTool(
           `Interactive world "${world.title}" started.`,
           `World: ${world.id}`,
           `Run: ${runId}`,
-          `Open: #/play`,
           "",
           sceneText,
           suggestedActions.length > 0 ? `\nSuggested actions:\n${suggestedActions.map((action) => `- ${action}`).join("\n")}` : "",
