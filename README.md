@@ -564,6 +564,10 @@ pnpm typecheck    # 类型检查
   <img src="https://contrib.rocks/image?repo=Narcooo/inkos" />
 </a>
 
+## 致谢
+
+InkOS 的 agent 运行时构建在 [pi](https://github.com/badlogic/pi-mono)（`@mariozechner/pi-ai` 与 `@mariozechner/pi-agent-core`，作者 Mario Zechner）之上。感谢 pi 提供的扎实底座。
+
 ## 许可证
 
 [AGPL-3.0](LICENSE)

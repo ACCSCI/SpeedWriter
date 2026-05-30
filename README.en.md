@@ -478,6 +478,10 @@ pnpm typecheck    # Type-check without emitting
   <img src="https://contrib.rocks/image?repo=Narcooo/inkos" />
 </a>
 
+## Acknowledgments
+
+InkOS's agent runtime is built on [pi](https://github.com/badlogic/pi-mono) (`@mariozechner/pi-ai` and `@mariozechner/pi-agent-core`) by Mario Zechner. Thanks to pi for the solid foundation.
+
 ## License
 
 [AGPL-3.0](LICENSE)

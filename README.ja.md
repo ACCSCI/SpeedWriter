@@ -456,6 +456,10 @@ pnpm typecheck    # 出力なしで型チェック
 
 ![Alt](https://repobeats.axiom.co/api/embed/024114415c1505a8c27fb121e3b392524e48f583.svg "Repobeats analytics image")
 
+## 謝辞
+
+InkOS のエージェントランタイムは Mario Zechner 氏の [pi](https://github.com/badlogic/pi-mono)（`@mariozechner/pi-ai` と `@mariozechner/pi-agent-core`）の上に構築されています。堅実な土台を提供してくれた pi に感謝します。
+
 ## ライセンス
 
 [AGPL-3.0](LICENSE)
