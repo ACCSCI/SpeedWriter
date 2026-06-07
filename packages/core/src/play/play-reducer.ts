@@ -49,8 +49,11 @@ const EVIDENCE_ORDER: readonly PlayEvidenceStatus[] = [
   "exhausted",
 ];
 
+const PLAYER_ENTITY_ID = "actor_player";
+const LEGACY_PLAYER_ENTITY_IDS = new Set(["player"]);
+
 export function applyPlayMutation(input: ApplyPlayMutationInput): ApplyPlayMutationResult {
-  const mutation = resolveEdgeEndpointLabels(input.db, PlayMutationSchema.parse(input.mutation));
+  const mutation = resolveEdgeEndpointLabels(input.db, canonicalizePlayerEntityIds(PlayMutationSchema.parse(input.mutation)));
   const event = PlayEventSchema.parse({
     id: mutation.eventId,
     turn: mutation.turn,
@@ -82,7 +85,7 @@ export interface SeedPlayGraphInput {
 }
 
 export function seedPlayGraph(input: SeedPlayGraphInput): void {
-  const mutation = resolveEdgeEndpointLabels(input.db, PlayMutationSchema.parse(input.mutation));
+  const mutation = resolveEdgeEndpointLabels(input.db, canonicalizePlayerEntityIds(PlayMutationSchema.parse(input.mutation)));
   validateMutation(input.db, mutation);
   const apply = () => {
     if (!mutation.blocked) applyGraphChanges(input.db, mutation);
@@ -92,6 +95,37 @@ export function seedPlayGraph(input: SeedPlayGraphInput): void {
 }
 
 type ParsedPlayMutation = ReturnType<typeof PlayMutationSchema.parse>;
+
+function canonicalizePlayerEntityIds(mutation: ParsedPlayMutation): ParsedPlayMutation {
+  const canonicalize = (entityId: string): string =>
+    LEGACY_PLAYER_ENTITY_IDS.has(entityId.trim()) ? PLAYER_ENTITY_ID : entityId;
+
+  return {
+    ...mutation,
+    entities: {
+      ...mutation.entities,
+      upsert: mutation.entities.upsert.map((entity) => ({
+        ...entity,
+        id: canonicalize(entity.id),
+      })),
+    },
+    edges: {
+      ...mutation.edges,
+      upsert: mutation.edges.upsert.map((edge) => ({
+        ...edge,
+        fromId: canonicalize(edge.fromId),
+        toId: canonicalize(edge.toId),
+      })),
+    },
+    stateSlots: {
+      ...mutation.stateSlots,
+      upsert: mutation.stateSlots.upsert.map((slot) => ({
+        ...slot,
+        ownerEntityId: slot.ownerEntityId ? canonicalize(slot.ownerEntityId) : slot.ownerEntityId,
+      })),
+    },
+  };
+}
 
 function resolveEdgeEndpointLabels(db: PlayReducerDB, mutation: ParsedPlayMutation): ParsedPlayMutation {
   if (mutation.edges.upsert.length === 0) {

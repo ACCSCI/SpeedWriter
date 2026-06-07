@@ -7,7 +7,7 @@ import type {
   PlayStateSlot,
   PlayStateSlotInput,
 } from "../models/play.js";
-import { applyPlayMutation } from "../play/play-reducer.js";
+import { applyPlayMutation, seedPlayGraph } from "../play/play-reducer.js";
 
 class FakePlayDB {
   entities = new Map<string, PlayEntity>();
@@ -69,6 +69,85 @@ class FakePlayDB {
 }
 
 describe("applyPlayMutation", () => {
+  it("canonicalizes the model's legacy player id to actor_player before applying graph changes", () => {
+    const db = new FakePlayDB();
+
+    applyPlayMutation({
+      db,
+      mutation: {
+        eventId: "evt-player",
+        turn: 1,
+        actionKind: "look",
+        summary: "玩家接过铜令牌。",
+        entities: {
+          upsert: [
+            { id: "player", type: "actor", label: "外门杂役（我）" },
+            { id: "copper_token", type: "item", label: "铜令牌" },
+          ],
+        },
+        edges: {
+          upsert: [
+            { id: "edge_player_持有_copper_token", fromId: "player", type: "持有", toId: "copper_token", value: { role: "holding" } },
+          ],
+        },
+        stateSlots: {
+          upsert: [
+            {
+              id: "pressure:player:danger",
+              ownerEntityId: "player",
+              kind: "pressure",
+              label: "被发现风险",
+              value: { current: 20, min: 0, max: 100 },
+              updatedEventId: "evt-player",
+            },
+          ],
+        },
+      },
+      rawInput: "接过铜令牌",
+    });
+
+    expect(db.entities.has("player")).toBe(false);
+    expect(db.entities.get("actor_player")).toMatchObject({
+      type: "actor",
+      label: "外门杂役（我）",
+    });
+    expect(db.edges.get("edge_player_持有_copper_token")).toMatchObject({
+      fromId: "actor_player",
+      toId: "copper_token",
+      value: { role: "holding" },
+    });
+    expect(db.stateSlots.get("pressure:player:danger")?.ownerEntityId).toBe("actor_player");
+  });
+
+  it("canonicalizes the player id when seeding the opening graph", () => {
+    const db = new FakePlayDB();
+
+    seedPlayGraph({
+      db,
+      mutation: {
+        eventId: "evt-0",
+        turn: 0,
+        actionKind: "look",
+        summary: "开场播种玩家持有物。",
+        entities: {
+          upsert: [
+            { id: "player", type: "actor", label: "守炉徒" },
+            { id: "copper_token", type: "item", label: "铜令牌" },
+          ],
+        },
+        edges: {
+          upsert: [
+            { id: "edge_player_持有_copper_token", fromId: "player", type: "持有", toId: "copper_token", value: { role: "holding" } },
+          ],
+        },
+      },
+    });
+
+    expect(db.entities.has("player")).toBe(false);
+    expect(db.entities.get("actor_player")?.label).toBe("守炉徒");
+    expect(db.edges.get("edge_player_持有_copper_token")?.fromId).toBe("actor_player");
+  });
+
   it("records the event and applies entity, edge, state, and evidence changes atomically", () => {
     const db = new FakePlayDB();
 
