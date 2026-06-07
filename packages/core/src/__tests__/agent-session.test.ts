@@ -114,6 +114,15 @@ vi.mock("@mariozechner/pi-ai", async () => {
               },
             },
           ], timestamp)
+        : prompt === "revise play"
+        ? assistant([
+            {
+              type: "toolCall",
+              id: "play-revise-1",
+              name: "play_revise",
+              arguments: { action: "regenerate_last" },
+            },
+          ], timestamp)
         : prompt === "use tool"
           ? assistant([
               {
@@ -671,6 +680,32 @@ describe("runAgentSession cache — bookId switch", () => {
     expect(result.messages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ role: "toolResult", toolName: "sub_agent" }),
+      ]),
+    );
+  });
+
+  it("treats play revise results as terminal instead of asking the model for extra prose", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
+    const pipeline = {
+      createAgentContext: vi.fn(() => ({})),
+    } as any;
+    await new PlayStore(projectRoot).createWorld({
+      id: "play-revise-terminal-session",
+      title: "雨巷账本",
+      premise: "玩家在雨巷里查一笔旧账。",
+      mode: "open",
+    });
+
+    const result = await runAgentSession(
+      { sessionId: "play-revise-terminal-session", bookId: null, sessionKind: "play", language: "zh", pipeline, projectRoot, model },
+      "revise play",
+    );
+
+    expect(result.responseText).toBe("");
+    expect(streamCalls).toHaveLength(1);
+    expect(result.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "toolResult", toolName: "play_revise" }),
       ]),
     );
   });

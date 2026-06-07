@@ -248,16 +248,31 @@ function isTerminalProductionToolName(toolName: unknown): boolean {
     || toolName === "short_fiction_run"
     || toolName === "generate_cover"
     || toolName === "play_start"
+    || toolName === "play_edit"
+    || toolName === "play_revise"
     || toolName === "play_step";
 }
 
-function isTerminalToolResultTail(messages: AgentMessage[]): boolean {
-  const last = messages.at(-1);
-  if (!last || typeof last !== "object" || !("role" in last)) return false;
-  if ((last as { role?: unknown }).role !== "toolResult") return false;
-  const toolName = (last as { toolName?: unknown }).toolName;
-  const isError = (last as { isError?: unknown }).isError;
-  return isTerminalProductionToolName(toolName) && isError !== true;
+function hasUnansweredTerminalToolResult(messages: AgentMessage[]): boolean {
+  let assistantTextAfterTool = false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || !("role" in message)) continue;
+    const role = (message as { role?: unknown }).role;
+    if (role === "user") return false;
+    if (role === "assistant") {
+      const text = extractTextFromAssistant(message as AssistantMessage).trim();
+      if (text) assistantTextAfterTool = true;
+      continue;
+    }
+    if (role !== "toolResult") continue;
+    const toolName = (message as { toolName?: unknown }).toolName;
+    const isError = (message as { isError?: unknown }).isError;
+    if (isTerminalProductionToolName(toolName) && isError !== true) {
+      return !assistantTextAfterTool;
+    }
+  }
+  return false;
 }
 
 async function runInAgentSessionQueue<T>(
@@ -821,7 +836,7 @@ async function runAgentSessionUnlocked(
       },
       transformContext: createBookContextTransform(bookId, projectRoot, { onContextCompression }),
       convertToLlm: (messages) => {
-        terminalToolResultTail = isTerminalToolResultTail(messages);
+        terminalToolResultTail = hasUnansweredTerminalToolResult(messages);
         return convertAgentMessagesForModel(messages, model);
       },
       streamFn: (streamModel, context, options) => {
