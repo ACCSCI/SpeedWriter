@@ -194,22 +194,66 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "^v$VERSION$" | head -1 || echo "")
+
+          # helper: find artifact by glob pattern, output table row
+          # optional 3rd arg: grep -v filter (e.g. "arm64" to exclude arm64 from x64 match)
+          artifact_row() {
+            local pattern="$1" desc="$2" exclude="${3:-}"
+            local f
+            if [ -n "$exclude" ]; then
+              f=$(find artifacts -type f -name "$pattern" | grep -v "$exclude" | head -1)
+            else
+              f=$(find artifacts -type f -name "$pattern" | head -1)
+            fi
+            if [ -n "$f" ]; then
+              local base size
+              base=$(basename "$f")
+              size=$(du -h "$f" | cut -f1)
+              echo "| \`$base\` | $size | $desc |"
+            fi
+          }
+
           {
             echo "## InkOS $VERSION"
             echo ""
-            echo "### 安装包 / Installers"
+            echo "### Download / 下载"
             echo ""
-            echo "| 平台 Platform | 文件 File |"
-            echo "| --- | --- |"
-            # 用 while IFS= read -r 处理文件名中的空格(Windows NSIS 'InkOS Setup X.Y.exe' 有空格)
-            # 原 for f in $(find ...) 写法按空白分割,会把 'InkOS Setup 1.5.1.exe' 切成 3 段导致 du 找不到
-            while IFS= read -r f; do
-              base=$(basename "$f")
-              size=$(du -h "$f" | cut -f1)
-              echo "| $(dirname "$f" | sed 's|artifacts/||') | \`$base\` ($size) |"
-            done < <(find artifacts -type f | sort)
+            echo "#### 🪟 Windows"
             echo ""
-            echo "### 验证 / Verify"
+            echo "| 文件 File | 大小 Size | 说明 |"
+            echo "| --- | --- | --- |"
+            artifact_row "InkOS-*-Setup.exe" "安装版 — 需管理员权限，创建桌面快捷方式"
+            artifact_row "InkOS-*-Portable.exe" "便携版 — 双击即用，无需安装"
+            echo ""
+            echo "#### 🍎 macOS"
+            echo ""
+            echo "| 文件 File | 大小 Size | 说明 |"
+            echo "| --- | --- | --- |"
+            artifact_row "InkOS-*-arm64.dmg" "Apple Silicon (M1/M2/M3/M4) — 推荐"
+            artifact_row "InkOS-*.dmg" "Intel Mac (x64)" "arm64"
+            artifact_row "InkOS-*-arm64-mac.zip" "Apple Silicon zip (自动更新用)"
+            artifact_row "InkOS-*-mac.zip" "Intel Mac zip (自动更新用)" "arm64"
+            echo ""
+            echo "#### 🐧 Linux"
+            echo ""
+            echo "| 文件 File | 大小 Size | 说明 |"
+            echo "| --- | --- | --- |"
+            artifact_row "InkOS-*.AppImage" "通用版 — chmod +x 后双击运行"
+            artifact_row "InkOS_*.deb" "Debian/Ubuntu — sudo dpkg -i"
+            echo ""
+            echo "### Install Guide / 安装说明"
+            echo ""
+            echo "> **Windows**: 推荐使用 **Portable** 版本，双击即用。如需安装版，若\"为所有用户安装\"失败，请右键安装包 → **以管理员身份运行**。"
+            echo ">"
+            echo "> **macOS**: 打开 DMG 后拖入 Applications。首次打开提示\"已损坏\"，请在终端执行:"
+            echo '> ```bash'
+            echo '> xattr -cr /Applications/InkOS.app'
+            echo '> ```'
+            echo "> Apple Silicon Mac (M1/M2/M3/M4) 请下载 **arm64** 版本，Intel Mac 下载不带 arm64 的版本。"
+            echo ">"
+            echo "> **Linux**: AppImage 下载后 `chmod +x InkOS-*.AppImage && ./InkOS-*.AppImage`。deb 包用 `sudo dpkg -i InkOS_*.deb` 安装。"
+            echo ""
+            echo "### Verify / 校验"
             echo ""
             echo '每个文件都有对应 SHA256(下载页面右侧)。比对方法:'
             echo '```bash'

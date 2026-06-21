@@ -23,7 +23,10 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-export function createMainWindow(serverUrl: string): BrowserWindow {
+export function createMainWindow(honoUrl: string): BrowserWindow {
+  // Dev 模式: 优先用 Vite dev server 地址(前端 HMR);
+  // 生产模式: 走内置 Hono server。
+  const serverUrl = process.env.VITE_DEV_SERVER_URL || honoUrl;
   const win = new BrowserWindow({
     width: 1400,
     height: 900,

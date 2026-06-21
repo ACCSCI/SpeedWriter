@@ -92,6 +92,7 @@ deb:
 
 # === NSIS ===
 nsis:
+  artifactName: "InkOS-${version}-Setup.exe"
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
@@ -99,6 +100,10 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: InkOS
   installerLanguages: ["en_US", "zh_CN", "ja_JP"]
+
+# === Portable ===
+portable:
+  artifactName: "InkOS-${version}-Portable.exe"
 
 # === DMG ===
 # icon.icns 是由 scripts/generate-mac-icon.mjs 在 macOS 上从 assets/logo.svg 生成的

@@ -13,9 +13,11 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, "..");
 const studioDir = resolve(rootDir, "packages", "studio");
+const desktopDir = resolve(rootDir, "packages", "desktop");
 
 const API_PORT = process.env.INKOS_STUDIO_PORT ?? "3001";
 const VITE_PORT = process.env.INKOS_VITE_PORT ?? "3000";
+const VITE_URL = `http://localhost:${VITE_PORT}`;
 
 // ── resolve project root (needs inkos.json) ─────────────────────────────────
 
@@ -61,9 +63,9 @@ function prefix(tag) {
   };
 }
 
-function launch(tag, cmd, args, env = {}) {
+function launch(tag, cmd, args, env = {}, cwd = studioDir) {
   const child = spawn(cmd, args, {
-    cwd: studioDir,
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     shell: true,
     env: { ...process.env, ...env },
@@ -105,7 +107,8 @@ function killPort(port) {
 
 console.log(`\n  InkOS Studio dev servers`);
 console.log(`  API   → http://localhost:${API_PORT}`);
-console.log(`  GUI   → http://localhost:${VITE_PORT}\n`);
+console.log(`  GUI   → ${VITE_URL}`);
+console.log(`  Electron → electronmon (main-process hot-restart)\n`);
 
 // Free up ports before launching
 await killPort(VITE_PORT);
@@ -119,10 +122,19 @@ const vite = launch("vite", "npx", ["vite", "--host", "--port", VITE_PORT], {
   INKOS_STUDIO_PORT: API_PORT,
 });
 
+// Electron: electronmon watches main-process files & auto-restarts.
+// VITE_DEV_SERVER_URL → window.ts loads Vite (HMR) instead of built Hono server.
+const electron = launch("electron", "npx", ["electronmon", "."], {
+  VITE_DEV_SERVER_URL: VITE_URL,
+  INKOS_STUDIO_PORT: API_PORT,
+  INKOS_PROJECT_ROOT: projectRoot,
+}, desktopDir);
+
 // ── graceful shutdown ────────────────────────────────────────────────────────
 
 function shutdown() {
   console.log("\n  Shutting down…");
+  electron.kill();
   api.kill();
   vite.kill();
   process.exit(0);
@@ -131,6 +143,7 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("exit", () => {
+  try { electron.kill(); } catch {}
   try { api.kill(); } catch {}
   try { vite.kill(); } catch {}
 });

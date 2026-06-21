@@ -146,7 +146,7 @@ function AppInner() {
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/30 backdrop-blur-sm">
         {/* Title bar / header strip:Win/Linux 用 TitleBar(自定义),macOS 用原生 header + 交通灯 */}
-        {!fullscreen && chrome === "custom" && <TitleBar />}
+        {!fullscreen && chrome === "custom" && <TitleBar theme={theme} setTheme={setTheme} />}
         {!fullscreen && chrome === "native" && (
           <InlineHeader
             nav={nav}

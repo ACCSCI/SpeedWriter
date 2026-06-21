@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Minus, Copy, X, Maximize2, ChevronRight, Sun, Moon } from "lucide-react";
 import { useHashRoute, type HashRoute } from "../hooks/use-hash-route";
 import { useApi, putApi } from "../hooks/use-api";
-import { useTheme } from "../hooks/use-theme";
+import type { Theme } from "../hooks/use-theme";
 import { useI18n } from "../hooks/use-i18n";
 import { InkosLogo } from "./InkosLogo";
 
@@ -74,9 +74,14 @@ function breadcrumbFor(
   return items;
 }
 
-export function TitleBar() {
+export function TitleBar({
+  theme,
+  setTheme,
+}: {
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+}) {
   const { route } = useHashRoute();
-  const { theme, setTheme } = useTheme();
   const { t, lang: currentLang } = useI18n();
   const { data: booksResp } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
 
@@ -117,9 +122,6 @@ export function TitleBar() {
     <header
       className="h-10 shrink-0 flex items-center justify-between pl-4 pr-0 border-b border-border/40 bg-background/95 backdrop-blur-sm select-none relative z-50"
       style={drag}
-      onDoubleClick={() => {
-        if (!fullscreen && api) void api.toggleMaximize();
-      }}
     >
       {/* Left: brand */}
       <div className="flex items-center gap-2" style={noDrag}>
@@ -128,7 +130,12 @@ export function TitleBar() {
       </div>
 
       {/* Center: breadcrumb */}
-      <nav className="flex-1 flex items-center justify-center gap-1.5 min-w-0 px-6 text-[14px] text-muted-foreground">
+      <nav
+        className="flex-1 flex items-center justify-center gap-1.5 min-w-0 px-6 text-[14px] text-muted-foreground"
+        onDoubleClick={() => {
+          if (!fullscreen && api) void api.toggleMaximize();
+        }}
+      >
         {crumbs.map((c, i) => (
           <span key={i} className="flex items-center gap-1.5 min-w-0">
             {i > 0 && <ChevronRight size={14} className="text-muted-foreground/50 shrink-0" />}
