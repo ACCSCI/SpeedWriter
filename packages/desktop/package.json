@@ -1,0 +1,46 @@
+{
+  "name": "@actalk/inkos-desktop",
+  "version": "1.5.0",
+  "private": true,
+  "description": "InkOS Desktop — Electron wrapper for InkOS Studio",
+  "main": "dist/main/index.js",
+  "type": "module",
+  "scripts": {
+    "build:studio": "pnpm --filter @actalk/inkos-studio build",
+    "prebuild": "npm run build:studio",
+    "build:main": "tsc",
+    "build:entry": "esbuild src/server/entry.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/main/server/entry.js --external:electron --minify --banner:js=\"import { createRequire as __crq } from 'node:module'; const require = __crq(import.meta.url);\"",
+    "build:preload": "esbuild src/preload/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/preload/index.js --external:electron",
+    "build": "npm run build:studio && npm run build:main && npm run build:entry && npm run build:preload",
+    "dev": "npm run build:main && npm run build:entry && npm run build:preload && electronmon .",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never",
+    "dist:all": "npm run build && electron-builder -mwl --publish never",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'no linter configured'",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test",
+    "test:smoke": "playwright test e2e/smoke.spec.ts",
+    "test:llm": "playwright test e2e/llm.spec.ts",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install --with-deps chromium"
+  },
+  "dependencies": {
+    "electron-store": "^10.0.0",
+    "portfinder": "^1.0.32"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.0.0",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0",
+    "electronmon": "^2.0.3",
+    "esbuild": "^0.24.0",
+    "playwright": "^1.49.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

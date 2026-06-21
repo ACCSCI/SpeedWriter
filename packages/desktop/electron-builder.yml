@@ -1,0 +1,91 @@
+appId: com.actalk.inkos
+productName: InkOS
+copyright: Copyright © 2026 InkOS
+asar: true
+# ⚠️ 关键:必须把子进程入口从 asar 里拆出来
+#   - dist/main/server/entry.js → spawn() 直接执行,不能压缩
+asarUnpack:
+  - "dist/main/server/entry.js"
+directories:
+  buildResources: build
+  output: dist
+# 极简白名单:只列我们真正需要打进 asar 的文件
+# core/studio 已被 esbuild 打进 entry.js,不需要再包含
+# 不依赖 workspace symlink(electron-builder 不解析 symlink 跨包)
+files:
+  - "package.json"
+  - "dist/main/index.js"
+  - "dist/main/window.js"
+  - "dist/main/server.js"
+  - "dist/main/ipc.js"
+  - "dist/main/safe-storage.js"
+  - "dist/main/user-data.js"
+  - "dist/main/update-checker.js"
+  - "dist/main/single-instance.js"
+  - "dist/main/menu.js"
+  - "dist/main/logger.js"
+  - "dist/main/debug.js"
+  - "dist/main/server/entry.js"
+  - "dist/preload/index.js"
+  - "!**/*.{md,markdown}"
+  - "!**/{__tests__,test,tests,examples,docs}/**"
+  - "!**/*.{map,d.ts}"
+extraResources:
+  - from: "../studio/dist"
+    to: "studio-dist"
+    filter: ["**/*"]
+  - from: "../core/genres"
+    to: "core-genres"
+    filter: ["**/*.md"]
+
+# === Mac ===
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+# === Windows ===
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+# === Linux ===
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  category: Office
+
+# === NSIS ===
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: InkOS
+  installerLanguages: ["en_US", "zh_CN", "ja_JP"]
+
+# === DMG ===
+dmg:
+  title: "${productName} ${version}"
+  icon: build/icon.icns
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

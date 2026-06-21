@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "@actalk/inkos-studio/api": ["../studio/src/api/server.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/server/entry.ts", "node_modules", "dist", "test", "e2e"]
+}
