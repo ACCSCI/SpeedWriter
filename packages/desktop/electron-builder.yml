@@ -82,6 +82,13 @@ linux:
       arch: [x64]
   category: Office
 
+# .deb artifactName 必须用 ${productName} 而非 ${name}
+# 否则 fpm 写入路径含 scoped npm 前缀 @actalk/,子目录不存在 → 失败
+# 默认 deb 输出:dist/@actalk/inkos-desktop_1.5.0_amd64.deb ❌
+# 期望输出:dist/InkOS_1.5.0_amd64.deb ✓
+deb:
+  artifactName: ${productName}_${version}_${arch}.${ext}
+
 # === NSIS ===
 nsis:
   oneClick: false
