@@ -201,11 +201,13 @@ jobs:
             echo ""
             echo "| 平台 Platform | 文件 File |"
             echo "| --- | --- |"
-            for f in $(find artifacts -type f | sort); do
+            # 用 while IFS= read -r 处理文件名中的空格(Windows NSIS 'InkOS Setup X.Y.exe' 有空格)
+            # 原 for f in $(find ...) 写法按空白分割,会把 'InkOS Setup 1.5.1.exe' 切成 3 段导致 du 找不到
+            while IFS= read -r f; do
               base=$(basename "$f")
               size=$(du -h "$f" | cut -f1)
               echo "| $(dirname "$f" | sed 's|artifacts/||') | \`$base\` ($size) |"
-            done
+            done < <(find artifacts -type f | sort)
             echo ""
             echo "### 验证 / Verify"
             echo ""
