@@ -121,6 +121,23 @@ jobs:
             Remove-Item -Force packages/desktop/dist/InkOS*.exe.blockmap
           }
 
+      # macOS DMG mount 清理(防止上次 run 残留 /Volumes/InkOS* 阻塞本次 detach)
+      - name: Clean leftover DMG mounts (macOS hdiutil fix)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # 找到所有 InkOS 相关的 mount point 并强制 detach
+          hdiutil info 2>/dev/null | awk '/\/Volumes\/InkOS/ {for(i=1;i<=NF;i++) if($i~/^\/dev\//) {print $i; break}}' | while read dev; do
+            echo "Detaching stale mount: $dev"
+            hdiutil detach -force "$dev" 2>/dev/null || true
+          done
+          # 兜底:直接按 volume 名字 detach
+          for vol in /Volumes/InkOS*; do
+            [ -e "$vol" ] || continue
+            echo "Removing stale volume dir: $vol"
+            hdiutil detach -force "$vol" 2>/dev/null || true
+          done
+
       - name: Generate Mac icon
         # 从 assets/logo.svg 渲染多分辨率 PNG 后打成 icns
         # electron-builder --mac 必需 build/icon.icns(macOS 自带 sips + iconutil)
