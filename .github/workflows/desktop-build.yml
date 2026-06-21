@@ -1,13 +1,9 @@
 name: Desktop Build
 
-# 临时关闭 tag 触发(本轮只配 verify,不发版)
-# 恢复方法:取消下面 3 行注释 + 删本注释
-# on:
-#   push:
-#     tags:
-#       - "v*"
-# 暂留手动触发(dry_run 测试流水线)
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       dry_run:

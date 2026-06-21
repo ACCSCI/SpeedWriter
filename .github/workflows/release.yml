@@ -8,8 +8,16 @@ on:
 permissions:
   contents: write
 
+# v1.2:没配 NPM_TOKEN → 整个 workflow skip(本次发版只发桌面,不发 npm)
+# 恢复 npm 发布只配 secret 即可,workflow 文件不变
+# 守门用 env.NPM_TOKEN(不是 secrets.NPM_TOKEN):见 commit 7d20f4e 修的 if 表达式坑
+env:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN || '' }}
+
 jobs:
   test:
+    # 守门:没配 NPM_TOKEN 跳过整个 workflow
+    if: env.NPM_TOKEN != ''
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -34,6 +42,8 @@ jobs:
       - run: pnpm test
 
   smoke-test:
+    # 守门:没配 NPM_TOKEN 跳过整个 workflow
+    if: env.NPM_TOKEN != ''
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -80,6 +90,8 @@ jobs:
           done
 
   publish-canary:
+    # 守门:没配 NPM_TOKEN 跳过整个 workflow
+    if: env.NPM_TOKEN != ''
     runs-on: ubuntu-latest
     needs: smoke-test
     outputs:
@@ -133,6 +145,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   verify-canary:
+    # 守门:没配 NPM_TOKEN 跳过整个 workflow
+    if: env.NPM_TOKEN != ''
     runs-on: ubuntu-latest
     needs: publish-canary
     steps:
@@ -191,9 +205,10 @@ jobs:
           rm -rf "$TMPDIR"
 
   publish-release:
+    # 守门:没配 NPM_TOKEN 跳过整个 workflow;并且只对 stable tag 跑(canary 跳过 publish-release)
+    if: env.NPM_TOKEN != '' && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     needs: [publish-canary, verify-canary]
-    if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -234,9 +249,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   verify-release:
+    # 守门:没配 NPM_TOKEN 跳过整个 workflow;并且只对 stable tag 跑
+    if: env.NPM_TOKEN != '' && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     needs: [publish-canary, publish-release]
-    if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -293,9 +309,10 @@ jobs:
           rm -rf "$TMPDIR"
 
   github-release:
+    # 守门:没配 NPM_TOKEN 跳过整个 workflow;并且只对 stable tag 跑
+    if: env.NPM_TOKEN != '' && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     needs: verify-release
-    if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - uses: actions/checkout@v4
         with:
