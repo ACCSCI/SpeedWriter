@@ -1,10 +1,10 @@
-# GitHub Actions — 三端桌面安装包打包方案 (v1.1)
+# GitHub Actions — 三端桌面安装包打包方案 (v1.2)
 
-> **版本**:v1.1(2026-06-21)
-> **变更**:v1.0 → v1.1 — **移除 CI 必须配 INKOS_LLM_API_KEY 的硬性要求**,改为可选;release job 不再依赖 llm;新增 §15 密钥安全审计
+> **版本**:v1.2(2026-06-21)
+> **变更**:v1.1 → v1.2 — **完全移除 CI Playwright**(本机保留 `@playwright/test` devDep);**删除 `.github/workflows/release.yml`**(npm 发版流程下线,本项目只发桌面 GUI);新增 desktop-build.yml release notes 文件名空格 bug 修复;新增 `packages/desktop/vitest.config.ts` exclude `e2e/**`;desktop/package.json 新增 `author`/`homepage`/`repository` 字段(electron-builder 25+ 元数据要求)
 > **目标**:在 GitHub Actions 上**全量自动化**出 macOS / Windows / Linux 三端安装包,Tag 推送即发布到 GitHub Release,用户下载即用
 > **配套文档**:[desktop-packaging.md](./desktop-packaging.md)(Electron 本体) · `scripts/verify-desktop.sh`(本机一键验证)
-> **代码现状**:本机 `dist:win` 已成功出过 `InkOS Setup 1.5.0.exe`(81M),三平台 e2e 绿灯
+> **代码现状**:5 次 dry-run 全绿(`27892652133` 4m17s);首 tag `v1.5.1` 真实推送 → 三平台 build + GitHub Release 成功
 
 ---
 
@@ -34,7 +34,7 @@
 
 1. **本机(Win)只写代码,出 Mac/Linux 包** → 推 `git tag v1.x.y` → GitHub Actions 自动出三端安装包 → 5~25 分钟后挂在 GitHub Release
 2. **本机**:`scripts/verify-desktop.sh` 跑通 = CI 会跑通(99% 行为对齐,差异只在缓存)
-3. **不要把任何 LLM key 配到 GitHub secrets**(用户装 App 后自己 paste,不是 CI 任务);CI e2e 跑真实 LLM 是可选,本机 `.env` 有 key 就能跑
+3. **不要把任何 LLM key 配到 GitHub secrets**(用户装 App 后自己 paste,不是 CI 任务);CI **不跑任何 e2e/Playwright**(本机 `.env` 有 key 仍能跑 `pnpm test:llm`,纯本地)
 
 ---
 
@@ -53,34 +53,20 @@
 
 ---
 
-## 3. 关键安全前提:Key 在哪
+## 3. 关键安全前提:Clean CI
 
-理解这个表才能理解本计划为什么不需要在 CI 配 key:
+> **v1.2 决定**:**CI 不读任何用户密钥**。用户装 App 后自己 paste MiniMax key,跟 CI 无关。
 
-### 3.1 Key 的三类来源
-
-| 来源 | 存在位置 | 谁用 | 进产物? |
-| --- | --- | --- | --- |
-| **A. 仓库 secret** | `Settings → Secrets → INKOS_LLM_API_KEY` | CI job env | ❌ 不进(只在 runner 内存) |
-| **B. 本机 `.env`** | `D:\Projects\...\SpeedWriter\.env`(gitignore) | 本机 e2e | ❌ 不进(gitignore,从未被 git track) |
-| **C. 用户在 App 内 paste** | `userData/.inkos/secrets.enc`(safeStorage 加密) | App runtime | ❌ 不进(在 userData,不在 app.asar) |
-
-### 3.2 CI 配 key 的真实意义
-
-**A 类(仓库 secret) = CI 跑 e2e/llm.spec.ts 用的"测试 fixture"**。它**不是**生产配置,跟用户装 App 后配的 key 无关。
-
-> **本计划 v1.1 决定**:**A 类 secret 完全可选**。仓库不配 = llm e2e 自动 skip;**不影响** build / release / 用户装包后跑 App。
-
-### 3.3 用户装 App 后的 key 流向(完全 CI 无关)
+CI 流程**完全不接触** LLM key / 任何用户密钥 — 用户密钥的完整生命周期:
 
 ```
 用户装 InkOS.exe
    ↓
 启动 App
    ↓
-UI 弹"请输入 MiniMax API Key"(只首次)
+UI 弹"请输入 API Key"(只首次)
    ↓
-用户粘贴自己的 key(在 MiniMax 后台自己申请的)
+用户粘贴自己的 key(在 LLM provider 后台自己申请的)
    ↓
 主进程 safeStorage.encryptString(...)
    ↓
@@ -91,6 +77,9 @@ UI 弹"请输入 MiniMax API Key"(只首次)
 ```
 
 **这条链上没有任何 CI 参与的环节**。
+
+> v1.1 之前,CI 跑 Playwright `e2e/llm.spec.ts` 会读 `secrets.INKOS_LLM_API_KEY`(可选)。
+> v1.2 起,**CI 不跑任何 Playwright / e2e**(本机 `pnpm test:llm` 仍可用,但需 `.env` 有 key)。
 
 ---
 
@@ -134,193 +123,52 @@ UI 弹"请输入 MiniMax API Key"(只首次)
 
 ## 5. 工作流 1:`desktop-verify.yml` — 验证闸门
 
-### 5.1 完整 yaml
+**v1.2 改写**(commit `103c04f`):从"3 平台 Playwright smoke"精简到"3 平台 packaging-only"。
 
-```yaml
-name: Desktop Verify
+### 5.0 当前职责
 
-# PR/merge 触发;tag 触发走 desktop-build.yml
-on:
-  push:
-    branches: [master, main, develop]
-  pull_request:
-    branches: [master, main]
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Test mode (full / smoke / llm)"
-        required: false
-        default: full
-        type: choice
-        options: [full, smoke, llm]
-
-# 同 ref 同一 SHA 取消旧 run
-concurrency:
-  group: desktop-verify-${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
-
-# 只读权限(verify job 无 release 操作)
-permissions:
-  contents: read
-
-env:
-  CSC_IDENTITY_AUTO_DISCOVERY: false   # 禁掉自动签名(我们不签名)
-
-jobs:
-  # ─── Smoke e2e:三平台都跑 ───
-  smoke:
-    name: Smoke e2e (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # 三平台都跑 smoke:
-        #   ubuntu  → 最快,主回归
-        #   windows → 验证 winCodeSign / DPAPI / 中文路径
-        #   macos-14 → 验证 safeStorage / 菜单 / DPI
-        # macos-14 而非 macos-latest:cache key 稳定(见 §7)
-        os: [ubuntu-latest, windows-latest, macos-14]
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with: { version: 9 }
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Cache Electron binaries
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/electron
-            ~/Library/Caches/electron
-            ~/AppData/Local/electron/Cache
-          key: electron-${{ runner.os }}-smoke-${{ hashFiles('packages/desktop/package.json', 'packages/desktop/electron-builder.yml') }}
-          restore-keys: electron-${{ runner.os }}-smoke-
-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @actalk/inkos-core build
-      - run: pnpm --filter @actalk/inkos-studio build
-      - run: pnpm --filter @actalk/inkos-desktop build
-      - run: pnpm --filter @actalk/inkos-desktop dist:dir
-
-      - name: Install Playwright browsers
-        run: pnpm --filter @actalk/inkos-desktop exec playwright install --with-deps chromium
-
-      # Windows 文件锁清理(d3dcompiler_47.dll "Access is denied" 防护)
-      - name: Cleanup leftover InkOS process
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Get-Process InkOS,electron -ErrorAction SilentlyContinue | Stop-Process -Force
-          if (Test-Path packages/desktop/dist/win-unpacked) {
-            Remove-Item -Recurse -Force packages/desktop/dist/win-unpacked
-          }
-          if (Test-Path packages/desktop/dist/InkOS*.exe.blockmap) {
-            Remove-Item -Force packages/desktop/dist/InkOS*.exe.blockmap
-          }
-
-      - name: Run smoke e2e
-        run: pnpm --filter @actalk/inkos-desktop test:smoke
-
-      - name: Upload screenshots on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-failures-${{ matrix.os }}
-          path: packages/desktop/test-results/
-          retention-days: 7
-
-  # ─── LLM e2e:可选,仅当仓库配了 INKOS_LLM_API_KEY secret ───
-  # v1.1 关键变更:不强制依赖 key
-  # - 没配 secret:job 自动 skip(本机 .env 有 key 仍可跑 test:llm)
-  # - 配了 secret:job 跑真实 MiniMax 调用
-  # - 不论哪种情况,smoke 仍跑全平台
-  llm:
-    name: LLM e2e (ubuntu, requires INKOS_LLM_API_KEY secret)
-    runs-on: ubuntu-latest
-    needs: smoke
-    # 三重守门 + secret 存在性检查
-    if: |
-      (github.event_name == 'push' ||
-       github.event_name == 'workflow_dispatch' ||
-       startsWith(github.ref, 'refs/tags/')) &&
-      secrets.INKOS_LLM_API_KEY != ''
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - name: Cache Electron
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/electron
-          key: electron-ubuntu-llm-${{ hashFiles('packages/desktop/package.json', 'packages/desktop/electron-builder.yml') }}
-          restore-keys: electron-ubuntu-llm-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @actalk/inkos-core build
-      - run: pnpm --filter @actalk/inkos-studio build
-      - run: pnpm --filter @actalk/inkos-desktop build
-      - run: pnpm --filter @actalk/inkos-desktop dist:dir
-      - run: pnpm --filter @actalk/inkos-desktop exec playwright install --with-deps chromium
-      - name: Run LLM e2e
-        env:
-          INKOS_LLM_API_KEY: ${{ secrets.INKOS_LLM_API_KEY }}
-          INKOS_LLM_BASE_URL: ${{ vars.INKOS_LLM_BASE_URL || 'https://api.minimaxi.com/v1' }}
-          INKOS_LLM_MODEL: ${{ vars.INKOS_LLM_MODEL || 'MiniMax-Text-01' }}
-        run: |
-          {
-            echo "INKOS_LLM_API_KEY=$INKOS_LLM_API_KEY"
-            echo "INKOS_LLM_BASE_URL=$INKOS_LLM_BASE_URL"
-            echo "INKOS_LLM_MODEL=$INKOS_LLM_MODEL"
-          } > .env
-          pnpm --filter @actalk/inkos-desktop test:llm
-```
-
-### 5.2 关键设计点解读
-
-| 设计点 | 为什么 |
-| --- | --- |
-| `concurrency.cancel-in-progress: true` | 同 PR 多次 push,旧 run 自动取消,省分钟数 |
-| `fail-fast: false` 在 smoke matrix | 某个平台挂,其他平台结果仍可见(便于排错) |
-| `permissions: contents: read` | verify 不写 release,最小权限原则 |
-| `CSC_IDENTITY_AUTO_DISCOVERY: false` | electron-builder 不会去读 macOS Keychain 找签名证书(我们没签) |
-| `cleanup leftover InkOS` 在 windows step | 防止上次 e2e 残留的 `InkOS.exe` 锁住 `d3dcompiler_47.dll` |
-| `if: ... && secrets.INKOS_LLM_API_KEY != ''` | **v1.1 核心改动**:没配 secret = llm job skip |
-| `INKOS_LLM_BASE_URL` / `INKOS_LLM_MODEL` 用 `vars` 而非 hard-code | 用户可改默认值而不用动 workflow |
-| `if-no-files-found: error`(build job 用) | 防止"没产物但 success"的静默 bug |
-| `test-results/` 7 天保留 | CI 失败时开发者可下载截图,不用重跑 |
-
-### 5.3 触发矩阵
-
-| GitHub 事件 | smoke(3 平台) | llm(ubuntu) |
+| 阶段 | 做什么 | 跑多久 |
 | --- | --- | --- |
-| PR open / sync | ✅ 跑 | ⏭️ skip(event_name 不是 push) |
-| push 到 master | ✅ 跑 | ⏬ 配了 key 才跑 |
-| push tag v* | ✅ 跑 | ⏬ 配了 key 才跑 |
-| workflow_dispatch | ✅ 跑 | ⏬ 配了 key 才跑 |
+| 1 | `pnpm install --frozen-lockfile` | ~30s |
+| 2 | `pnpm --filter @actalk/inkos-{core,studio,desktop} build` | ~3 min |
+| 3 | (macOS only) `node scripts/generate-mac-icon.mjs` | ~5s |
+| 4 | (Windows only) file-lock cleanup | ~5s |
+| 5 | `pnpm --filter @actalk/inkos-desktop dist:dir`(electron-builder 产出 unpacked app) | ~3-5 min |
+| 6 | 验证产物存在(`InkOS.exe` / `InkOS.app` / `linux-unpacked/`) | <1s |
 
-### 5.4 性能基线(参考)
+**完整 yaml 直接看**:[`.github/workflows/desktop-verify.yml`](../.github/workflows/desktop-verify.yml)(~90 行,本文不内嵌)。
+
+### 5.1 v1.2 相对 v1.1 的变化
+
+| 项 | v1.1 | v1.2 |
+| --- | --- | --- |
+| Playwright install chromium | ✅ 跑 | ❌ **删除** |
+| `test:smoke` Playwright e2e | ✅ 跑 | ❌ **删除** |
+| `test:llm` MiniMax e2e | ✅ 可选 | ❌ **删除** |
+| Build + dist:dir | ✅ 跑 | ✅ **保留** |
+| Mac icon generation | ❌ 缺 | ✅ **新增**(只在 mac runner) |
+| 产物存在性 check | 隐含 | ✅ **新增**(per-platform 显式 `test -f`) |
+
+### 5.2 触发矩阵
+
+| GitHub 事件 | 运行? |
+| --- | --- |
+| `push` 到 master/main/develop | ✅ |
+| `pull_request` 到 master/main | ✅ |
+| `workflow_dispatch` | ✅ |
+| `push tag v*` | ❌(走 desktop-build.yml) |
+
+### 5.3 性能基线
 
 | Job | 首次(含下载) | 缓存命中 |
 | --- | --- | --- |
-| smoke ubuntu | ~7 min | ~3 min |
-| smoke windows | ~10 min | ~5 min |
-| smoke macos-14 | ~13 min | ~7 min |
-| llm ubuntu(配 key) | ~5 min | ~3 min |
+| packaging ubuntu | ~5 min | ~3 min |
+| packaging windows | ~8 min | ~5 min |
+| packaging macos-14 | ~10 min | ~7 min |
 
-**PR 全绿标准时长**:~13 min(3 平台并行,取最慢 mac)
+**PR 全绿标准时长**:~10 min(3 平台并行,取最慢 mac)
 
 ---
-
 ## 6. 工作流 2:`desktop-build.yml` — 出包 + 发布
 
 ### 6.1 完整 yaml
@@ -465,7 +313,7 @@ jobs:
           if-no-files-found: error
 
   # ─── Release:汇总三平台产物,发布到 GitHub Release ───
-  # v1.1 变更:不再 needs: llm(llm 是可选,不能卡 release)
+  # tag 推送才跑(workflow_dispatch(dry_run)跳过)
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
@@ -557,8 +405,11 @@ jobs:
 | `softprops/action-gh-release@v2` 而非 `gh release create` CLI | 自动 SHA256、自动 RST/README 检测、API 调用更稳 |
 | `fail_on_unmatched_files: true` | 防止 glob 写错时静默成功 |
 | `workflow_dispatch` 的 `dry_run` | 测试流水线时只出包不上传,避免污染 release 列表 |
-| 不 `needs: llm` | v1.1 核心:llm 是可选 secret,不能成为 release 的依赖 |
+| `release` job 只在 tag 触发才跑 | `if: startsWith(ref, 'refs/tags/v') && event_name == 'push'` |
 | `GH_TOKEN` 给 electron-builder | 让它能写 update metadata(虽然我们用不到,但传了不亏) |
+| 文件名空格 bug 修复(L226 附近) | Windows NSIS `InkOS Setup X.Y.exe` 有空格,`for f in $(find ...)` 会按空白切分。改用 `while IFS= read -r` |
+| `deb.artifactName: ${productName}_...` | 默认 `${name}` 是 scoped npm 名(`@actalk/inkos-desktop`),fpm 写路径含 `@actalk/` 子目录不存在 → 失败 |
+| macOS `hdiutil detach -force` cleanup | 防上次 run 残留 `/Volumes/InkOS*` mount 阻塞本次 detach |
 
 ### 6.3 build 触发矩阵
 
@@ -603,7 +454,6 @@ electron-{os}-{job_type}-{version_or_hash}
 
 - `packages/desktop/dist/`:产物,每次必重出
 - `.env` / `secrets.json`:已经 gitignore,且不能进 cache(否则有泄露风险)
-- `playwright/`:用 `playwright install` 重新拉
 
 ### 7.4 cache miss 排错
 
@@ -910,6 +760,14 @@ gh release delete v1.5.1 --yes
 | `pnpm install` 报 `EACCES` | cache 目录权限 | Actions runner 不会出,真出就 `rm -rf ~/.local/share/pnpm/store` 后重跑 |
 | `electron-builder download failed` | 网络抖动 | 失败时自动 retry job(workflow 自带) |
 | `git tag not found` | tag 没推全 | `git push origin --tags --force`(慎用 force) |
+| `release-notes` step:`du: cannot access 'artifacts/InkOS'` | Windows NSIS `InkOS Setup X.Y.exe` 含空格,`for f in $(find ...)` 按空白切分 | 改用 `while IFS= read -r f` 模式(commit `00cdff2`) |
+| macOS:`hdiutil detach ... exit 1` | 上次 run 残留 `/Volumes/InkOS*` mount | mac runner pre-package step 已加 `hdiutil detach -force`(commit `012489f`) |
+| Linux:`Parent directory does not exist: dist/@actalk` | fpm 写路径含 scoped npm 名 `@actalk/inkos-desktop` | `electron-builder.yml` `deb.artifactName: ${productName}_${version}_${arch}.${ext}`(commit `ce964b3`) |
+| Linux/Windows:`Please specify author 'email'` | electron-builder 25+ 严格 .deb 元数据 | `desktop/package.json` 加 `author` / `homepage` / `repository` |
+| Linux/Windows:`Cannot read properties of null (reading 'provider')` | electron-builder 25+ 需 publish provider | `electron-builder.yml` 加 `publish: provider: github` |
+| Mac:`Can't write format: public.svg-image` | `sips` 不支持 SVG 输入 | 用 `qlmanage`(macOS 自带)先 SVG→PNG,再 `sips` 缩放 |
+| CI run:`Playwright Test did not expect test.describe()` | vitest 把 `e2e/*.spec.ts` 当 vitest 测试 | `packages/desktop/vitest.config.ts` exclude `e2e/**` |
+| Tag 推完 CI 没跑 `desktop-build.yml` | tag trigger 还在注释(临时关) | 取消 `desktop-build.yml` L5-8 注释(commit `32acfd0`)|
 
 ### 12.2 怎么本地复现 CI 报错
 
@@ -1119,22 +977,17 @@ extraResources: # 只列了 studio/dist, core/genres
 - **Key 永远不在 CI runner 内存以外的任何地方**(不写 cache,artifact 不含)
 - **Key 永远不进 release 产物**(artifact 是 build 产物,跟 user 端 key 无关)
 
-### 15.3 CI 上的 `INKOS_LLM_API_KEY`(可选,非生产)
+### 15.3 CI 上的密钥(已下线)
 
-**这层**:
-- 存在 `secrets.INKOS_LLM_API_KEY`
-- 只用于 CI 的 `llm` job
-- 注入到 `process.env.INKOS_LLM_API_KEY`
-- 写入临时 `.env` 文件
-- 跑 `test:llm` 后 step 结束
+> **v1.2 起,CI 完全不读任何 LLM key / 用户密钥**。
+>
+> - v1.1 之前 CI 跑 `e2e/llm.spec.ts`,读 `secrets.INKOS_LLM_API_KEY`(可选)
+> - v1.1 用 `step-level env` 守门(commit `7d20f4e`):没配 secret = llm job skip
+> - v1.2 完全删除 `llm` job + Playwright:**不再有任何 CI 步骤读用户 key**
+>
+> 本机 `pnpm test:llm` 仍可用(读 `.env`),但与 CI 完全脱钩。
 
-**绝不**:
-- 写到 artifact
-- 写到 cache
-- 写进 package.json / electron-builder.yml
-- 进任何 commit
-
-**没配** = llm job 自动 skip(`secrets.X != ''` 检查)
+`secrets.GITHUB_TOKEN`(自动)仍由 desktop-build 的 `release` job 用,仅用于上传到 GitHub Release,**不是用户密钥**。
 
 ### 15.4 怀疑泄露时的验证
 
@@ -1182,19 +1035,32 @@ ls -la packages/desktop/dist/win-unpacked/resources/ 2>&1
 
 | Secret / Var | 必配? | 用途 | 缺失行为 |
 | --- | --- | --- | --- |
-| `secrets.GITHUB_TOKEN` | ✅ 自动 | Actions 默认提供,release 上传 | N/A(GitHub 自动) |
-| `secrets.INKOS_LLM_API_KEY` | ❌ 可选 | CI 跑 `e2e/llm.spec.ts` | llm job skip,不影响 build/release |
-| `vars.INKOS_LLM_BASE_URL` | ❌ 可选 | 自定义 LLM endpoint | 默认 `https://api.minimaxi.com/v1` |
-| `vars.INKOS_LLM_MODEL` | ❌ 可选 | 自定义模型 | 默认 `MiniMax-Text-01` |
-| `secrets.SLACK_WEBHOOK` | ❌ 可选 | 失败时 Slack 通知 | step 静默跳过 |
+| `secrets.GITHUB_TOKEN` | ✅ 自动 | Actions 默认提供;`desktop-build.yml` 的 `release` job 用它创建 GitHub Release + 上传 8 文件 | N/A(GitHub 自动) |
 
-**最小配置**:**0 secrets + 0 vars**(完全够用,只是 CI 跑不了真实 LLM e2e)
+**最小配置**:**0 secrets + 0 vars**(完全够用,只发桌面 GUI)
 
-**推荐配置**:`secrets.INKOS_LLM_API_KEY`(1 个)+ 都不配 vars(用默认)
+> v1.1 之前还要 `secrets.INKOS_LLM_API_KEY` / `vars.INKOS_LLM_BASE_URL` / `vars.INKOS_LLM_MODEL` / `secrets.SLACK_WEBHOOK`,v1.2 起**全部不再需要**(CI 不跑 Playwright,不发 npm)。
 
 ---
 
 ## 17. 变更历史
+
+### v1.2(2026-06-21)
+
+| 变更 | 原因 |
+| --- | --- |
+| **删除 `.github/workflows/release.yml`** | 用户决策:只发桌面 GUI,不需要 npm publish |
+| `desktop-verify.yml` 去除 Playwright(commit `103c04f`) | 用户反馈"ci 不应该跑 playwright,装都不要装" |
+| `desktop-build.yml` release notes 用 `while IFS= read -r`(commit `00cdff2`) | Windows NSIS `InkOS Setup X.Y.exe` 有空格,`for f in $(...)` 误切分 |
+| `desktop-build.yml` macOS `hdiutil detach -force` cleanup(commit `012489f`) | 防上次 run 残留 `/Volumes/InkOS*` 阻塞本次 detach |
+| `desktop-build.yml` deb.artifactName 用 `${productName}`(commit `ce964b3`) | 默认 `${name}` 是 scoped npm 名,fpm 写路径含 `@actalk/` 子目录不存在 |
+| `desktop-build.yml` macOS icon 生成 step(commit `d060fe4`) | macOS runner 现场从 `assets/logo.svg` 渲染 `build/icon.icns`(用 `qlmanage` 替代不支 SVG 的 `sips`) |
+| `electron-builder.yml` 加 `publish: provider: github` | electron-builder 25+ 需要 publish provider 才能跑 update-info(否则 `createUpdateInfoTasks` 读 `.provider` 崩) |
+| `electron-builder.yml` deb.artifactName | 同上(commit `ce964b3`) |
+| `desktop/package.json` 加 `author` / `homepage` / `repository` | electron-builder 25+ 对 .deb 元数据严格 |
+| 新建 `packages/desktop/vitest.config.ts` | `pnpm test` 不再误把 Playwright `e2e/*.spec.ts` 当 vitest 测试(修 CI run `27891683843`) |
+| `.gitignore` 加 `package-lock.json` | 本项目用 pnpm,若出现 npm lockfile 说明误用 `npm install` |
+| 文档重写 §3 / §5 / §6 / §15 / §16 | 移除 INKOS_LLM / Playwright / MiniMax specifics |
 
 ### v1.1(2026-06-21)
 
