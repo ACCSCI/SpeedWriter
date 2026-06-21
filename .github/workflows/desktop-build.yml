@@ -1,0 +1,227 @@
+name: Desktop Build
+
+# 临时关闭 tag 触发(本轮只配 verify,不发版)
+# 恢复方法:取消下面 3 行注释 + 删本注释
+# on:
+#   push:
+#     tags:
+#       - "v*"
+# 暂留手动触发(dry_run 测试流水线)
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip upload to release (build only)"
+        required: false
+        default: "false"
+        type: boolean
+
+# 同 tag 取消旧 build(避免两台 runner 同时出包)
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+# release job 必须 write
+permissions:
+  contents: write
+
+env:
+  CSC_IDENTITY_AUTO_DISCOVERY: false  # 禁掉自动签名(我们不签名)
+
+jobs:
+  # ─── 三平台并行构建 ───
+  # 策略:fail-fast: false(一个挂了,其他产物还能上 release)
+  build:
+    name: Build ${{ matrix.target }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # === Mac:出 .dmg + .zip,universal(x64 + arm64) ===
+          # macos-14 而非 macos-latest:cache key 稳定
+          - os: macos-14
+            target: mac
+            build_script: dist:mac
+            artifact_glob: |
+              packages/desktop/dist/*.dmg
+              packages/desktop/dist/*.zip
+            artifact_name: macos
+          # === Windows:出 NSIS + portable ===
+          - os: windows-latest
+            target: win
+            build_script: dist:win
+            artifact_glob: packages/desktop/dist/*.exe
+            artifact_name: windows
+          # === Linux:出 AppImage + .deb ===
+          - os: ubuntu-latest
+            target: linux
+            build_script: dist:linux
+            artifact_glob: |
+              packages/desktop/dist/*.AppImage
+              packages/desktop/dist/*.deb
+            artifact_name: linux
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tag 触发时能拿到 commit log
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # workflow_dispatch 时回退到 package.json
+            VERSION="$(node -p "require('./packages/desktop/package.json').version")"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building InkOS $VERSION for ${{ matrix.target }}"
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          # 与 verify 不同的 cache 命名空间(防止互相覆盖)
+          key: electron-${{ runner.os }}-build-${{ steps.version.outputs.version }}
+          restore-keys: electron-${{ runner.os }}-build-
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all packages
+        run: |
+          pnpm --filter @actalk/inkos-core build
+          pnpm --filter @actalk/inkos-studio build
+          pnpm --filter @actalk/inkos-desktop build
+
+      # Windows file lock 清理(本机已踩过,CI 也会偶发)
+      - name: Clean leftover processes (Windows file lock fix)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-Process InkOS,electron -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (Test-Path packages/desktop/dist/win-unpacked) {
+            Remove-Item -Recurse -Force packages/desktop/dist/win-unpacked
+          }
+          if (Test-Path packages/desktop/dist/InkOS*.exe.blockmap) {
+            Remove-Item -Force packages/desktop/dist/InkOS*.exe.blockmap
+          }
+
+      - name: Package ${{ matrix.target }}
+        run: pnpm --filter @actalk/inkos-desktop ${{ matrix.build_script }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # electron-builder 用它做 update metadata
+
+      - name: Verify artifacts exist
+        shell: bash
+        run: |
+          echo "Artifacts in dist/:"
+          ls -la packages/desktop/dist/ | grep -E '\.(dmg|zip|exe|AppImage|deb|AppImage\.blockmap|deb\.blockmap)$' || {
+            echo "ERROR: no artifacts found"
+            exit 1
+          }
+
+      - name: Upload build artifacts (保留 30 天,无论是否 release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkos-${{ matrix.artifact_name }}-${{ steps.version.outputs.version }}
+          path: ${{ matrix.artifact_glob }}
+          retention-days: 30
+          if-no-files-found: error
+
+  # ─── Release:等三平台都构建完,统一发布到 GitHub Release ───
+  # 注意:不再 needs: llm,因为 llm job 在没配 INKOS_LLM_API_KEY 时会 skip
+  #       没配 llm key 是常见默认状态,不能因此阻断 release
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    # 只有 tag 触发才上传;workflow_dispatch(dry_run 测试)跳过
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: |
+          echo "=== Downloaded artifacts ==="
+          find artifacts -type f | sort
+
+      - name: Generate release notes
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^v$VERSION$" | head -1 || echo "")
+          {
+            echo "## InkOS $VERSION"
+            echo ""
+            echo "### 安装包 / Installers"
+            echo ""
+            echo "| 平台 Platform | 文件 File |"
+            echo "| --- | --- |"
+            for f in $(find artifacts -type f | sort); do
+              base=$(basename "$f")
+              size=$(du -h "$f" | cut -f1)
+              echo "| $(dirname "$f" | sed 's|artifacts/||') | \`$base\` ($size) |"
+            done
+            echo ""
+            echo "### 验证 / Verify"
+            echo ""
+            echo '每个文件都有对应 SHA256(下载页面右侧)。比对方法:'
+            echo '```bash'
+            echo '# macOS / Linux'
+            echo 'shasum -a 256 InkOS-*.dmg'
+            echo '# Windows (PowerShell)'
+            echo 'Get-FileHash InkOS*.exe'
+            echo '```'
+            echo ""
+            echo "### 更新说明 / Changelog"
+            if [ -n "$PREV_TAG" ]; then
+              git log --pretty=format:"- %s" "$PREV_TAG..HEAD" | head -50
+            else
+              echo "首个 release tag"
+            fi
+          } > release-notes.md
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          cat release-notes.md >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create / Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "InkOS ${{ github.ref_name }}"
+          body: ${{ steps.notes.outputs.notes }}
+          generate_release_notes: false   # 我们自己生成(包含产物表格)
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.zip
+            artifacts/**/*.exe
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
