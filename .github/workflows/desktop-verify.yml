@@ -2,19 +2,14 @@ name: Desktop Verify
 
 # PR/merge 触发的验证闸门
 # 注:tag 触发不在这里(单独走 desktop-build.yml)
+# v1.2:移除 Playwright/MiniMax key — 只验证 build + electron-builder 打包通畅
+#      Playwright e2e 仅本地跑(见 scripts/verify-desktop.sh)
 on:
   push:
     branches: [master, main, develop]
   pull_request:
     branches: [master, main]
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "Test mode (full / smoke / llm)"
-        required: false
-        default: full
-        type: choice
-        options: [full, smoke, llm]
 
 # 并发:同 ref 同一 SHA 取消旧 run(避免同 PR 多次 push 浪费)
 concurrency:
@@ -29,15 +24,15 @@ env:
   CSC_IDENTITY_AUTO_DISCOVERY: false  # 禁掉自动签名发现(我们本就不签名)
 
 jobs:
-  # ─── Smoke e2e:三平台都跑 ───
-  smoke:
-    name: Smoke e2e (${{ matrix.os }})
+  # ─── 打包验证:三平台 build + dist:dir,验证 electron-builder config 没坏 ───
+  # 不跑 Playwright / 不读 MiniMax key(都挪到本地 scripts/verify-desktop.sh)
+  packaging:
+    name: Build + package (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # 三平台都跑 smoke:验证主进程能起、Hono 子进程能连
-        # Mac 用 macos-14 而非 macos-latest:cache key 稳定(见 GITHUB_ACTIONS_DESKTOP.md 8.2)
+        # 三平台都跑 packaging:Mac 用 macos-14 而非 macos-latest:cache key 稳定
         os: [ubuntu-latest, windows-latest, macos-14]
     timeout-minutes: 45
     steps:
@@ -75,13 +70,12 @@ jobs:
       - name: Build desktop
         run: pnpm --filter @actalk/inkos-desktop build
 
-      - name: Package (dir only, smoke 不出 installer)
-        run: pnpm --filter @actalk/inkos-desktop dist:dir
+      # Mac 需要先在 runner 上现场生成 icon.icns(sips 不支持 SVG,脚本用 qlmanage + sips)
+      - name: Generate Mac icon
+        if: runner.os == 'macOS'
+        run: node scripts/generate-mac-icon.mjs
 
-      - name: Install Playwright browsers
-        run: pnpm --filter @actalk/inkos-desktop exec playwright install --with-deps chromium
-
-      # P-新:Windows 文件锁清理(防 d3dcompiler_47.dll "Access is denied")
+      # Windows 文件锁清理(防 d3dcompiler_47.dll "Access is denied")
       - name: Cleanup leftover InkOS process (Windows file lock workaround)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -94,70 +88,24 @@ jobs:
             Remove-Item -Force packages/desktop/dist/InkOS*.exe.blockmap
           }
 
-      - name: Run smoke e2e
-        run: pnpm --filter @actalk/inkos-desktop test:smoke
+      - name: Package (dist:dir, no installer)
+        run: pnpm --filter @actalk/inkos-desktop dist:dir
 
-      - name: Upload screenshots on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-failures-${{ matrix.os }}
-          path: packages/desktop/test-results/
-          retention-days: 7
-
-  # ─── LLM e2e:可选,仅当仓库配了 INKOS_LLM_API_KEY secret ───
-  # v1.1 关键变更:不强制依赖 key
-  # - 没配 secret:skip_guard step 检测后 print notice,job 标绿但不跑 llm 测试
-  # - 配了 secret:完整跑真实 MiniMax 调用
-  # - 不论哪种情况,smoke 仍跑全平台
-  #
-  # 关键 fix:GitHub Actions 表达式不允许在 if 里直接读 secrets.X
-  # 解法:把 secret 守门放到 step 内部,读 env.INKOS_LLM_API_KEY 判断(env 是允许的)
-  llm:
-    name: LLM e2e (ubuntu only, requires INKOS_LLM_API_KEY secret)
-    runs-on: ubuntu-latest
-    needs: smoke
-    # job-level 只守 event 类型(secrets.X 不允许在 if 表达式里读)
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - name: Cache Electron
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/electron
-          key: electron-ubuntu-llm-${{ hashFiles('packages/desktop/package.json', 'packages/desktop/electron-builder.yml') }}
-          restore-keys: electron-ubuntu-llm-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @actalk/inkos-core build
-      - run: pnpm --filter @actalk/inkos-studio build
-      - run: pnpm --filter @actalk/inkos-desktop build
-      - run: pnpm --filter @actalk/inkos-desktop dist:dir
-      - run: pnpm --filter @actalk/inkos-desktop exec playwright install --with-deps chromium
-
-      # 守门:把 secret 注入 env,env 是空串则 print notice(后续 step 不会跑)
-      # env.X 是允许的,因为 env 是该 step 注入的,不是直接读 secrets
-      - name: Skip LLM (no INKOS_LLM_API_KEY secret configured)
-        if: env.INKOS_LLM_API_KEY == ''
-        env:
-          INKOS_LLM_API_KEY: ${{ secrets.INKOS_LLM_API_KEY }}
+      # 验证 dist 产物存在(各平台路径不同)
+      - name: Verify packaged artifact exists
+        shell: bash
         run: |
-          echo "::notice title=LLM e2e skipped::INKOS_LLM_API_KEY secret not configured — skipping LLM e2e (本机 .env 有 key 仍可本地跑 test:llm)"
-
-      - name: Run LLM e2e
-        if: env.INKOS_LLM_API_KEY != ''
-        env:
-          INKOS_LLM_API_KEY: ${{ secrets.INKOS_LLM_API_KEY }}
-          INKOS_LLM_BASE_URL: ${{ vars.INKOS_LLM_BASE_URL || 'https://api.minimaxi.com/v1' }}
-          INKOS_LLM_MODEL: ${{ vars.INKOS_LLM_MODEL || 'MiniMax-Text-01' }}
-        run: |
-          {
-            echo "INKOS_LLM_API_KEY=$INKOS_LLM_API_KEY"
-            echo "INKOS_LLM_BASE_URL=$INKOS_LLM_BASE_URL"
-            echo "INKOS_LLM_MODEL=$INKOS_LLM_MODEL"
-          } > .env
-          pnpm --filter @actalk/inkos-desktop test:llm
+          case "${{ runner.os }}" in
+            Windows)
+              test -f "packages/desktop/dist/win-unpacked/InkOS.exe" || { echo "ERROR: InkOS.exe not found"; exit 1; }
+              echo "OK: InkOS.exe found at packages/desktop/dist/win-unpacked/InkOS.exe"
+              ;;
+            macOS)
+              test -d "packages/desktop/dist/mac/InkOS.app" || test -d "packages/desktop/dist/mac-arm64/InkOS.app" || { echo "ERROR: InkOS.app not found"; ls -la packages/desktop/dist/; exit 1; }
+              echo "OK: InkOS.app found"
+              ;;
+            Linux)
+              test -d "packages/desktop/dist/linux-unpacked" || { echo "ERROR: linux-unpacked not found"; ls -la packages/desktop/dist/; exit 1; }
+              echo "OK: linux-unpacked found"
+              ;;
+          esac
