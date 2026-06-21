@@ -5,6 +5,15 @@
   "description": "InkOS Desktop — Electron wrapper for InkOS Studio",
   "main": "dist/main/index.js",
   "type": "module",
+  "author": {
+    "name": "Marco Taylor",
+    "email": "nonesimple@yandex.com"
+  },
+  "homepage": "https://github.com/Narcooo/inkos",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Narcooo/inkos.git"
+  },
   "scripts": {
     "build:studio": "pnpm --filter @actalk/inkos-studio build",
     "prebuild": "npm run build:studio",

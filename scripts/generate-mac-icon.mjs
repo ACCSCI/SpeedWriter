@@ -3,23 +3,23 @@
  * InkOS Desktop — 生成 macOS .icns 图标
  *
  * 用途:从 assets/logo.svg 渲染多分辨率 PNG,再用 iconutil 打成 icns。
- *      electron-builder --mac 必须有 build/icon.icns(GitHub Actions macos-14 runner 自带 sips + iconutil)。
+ *      electron-builder --mac 必须有 build/icon.icns(GitHub Actions macos-14 runner 自带 qlmanage + sips + iconutil)。
  *
  * 跨平台:
- *   - macOS:sips 把 SVG → 多个 PNG(16/32/64/128/256/512/1024),iconutil 打成 icns。
+ *   - macOS:qlmanage 把 SVG → base PNG(支持 SVG),sips 缩放到各尺寸,iconutil 打成 icns。
  *   - 其他平台:no-op + warn(留给 CI 处理),但仍然退出 0 避免阻塞 verify。
  *
  * 退出码:
  *   - 0  → 成功生成或 no-op
- *   - 1  → 生成失败(SVG 不存在、sips/iconutil 报错等)
+ *   - 1  → 生成失败(SVG 不存在、qlmanage/sips/iconutil 报错等)
  *
  * 用法:
  *   node scripts/generate-mac-icon.mjs
  *   node scripts/generate-mac-icon.mjs --source assets/logo.svg --out packages/desktop/build/icon.icns
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 
@@ -66,19 +66,30 @@ try {
   rmSync(iconsetDir, { recursive: true, force: true });
   mkdirSync(iconsetDir, { recursive: true });
 
-  // === 2) sips 把 SVG 转成各尺寸 PNG ===
-  for (const size of ICON_SIZES) {
-    const out = `${iconsetDir}/icon_${size}x${size}.png`;
-    execFileSync("sips", ["-z", String(size), String(size), SOURCE, "--out", out], { stdio: "pipe" });
+  // === 2) qlmanage 把 SVG 转成 base PNG(1024x1024 起步,足够 retina) ===
+  // macOS sips 不支持 SVG 输入,但 qlmanage(Quick Look)支持 — 用它先转成 PNG
+  // 输出:iconsetDir/{原文件名}.png(qlmanage 自动加 .png 后缀)
+  execFileSync("qlmanage", ["-t", "-s", "1024", "-o", iconsetDir, SOURCE], { stdio: "pipe" });
+  const qlOutput = `${iconsetDir}/${basename(SOURCE)}.png`;
+  const basePng = `${iconsetDir}/base_1024.png`;
+  if (!existsSync(qlOutput)) {
+    fail(`qlmanage didn't produce ${qlOutput}`);
+    process.exit(1);
   }
-  // === 3) @2x 视网膜图标(必备) ===
-  execFileSync("sips", ["-z", "32", "32", SOURCE, "--out", `${iconsetDir}/icon_16x16@2x.png`], { stdio: "pipe" });
-  execFileSync("sips", ["-z", "64", "64", SOURCE, "--out", `${iconsetDir}/icon_32x32@2x.png`], { stdio: "pipe" });
-  execFileSync("sips", ["-z", "256", "256", SOURCE, "--out", `${iconsetDir}/icon_128x128@2x.png`], { stdio: "pipe" });
-  execFileSync("sips", ["-z", "512", "512", SOURCE, "--out", `${iconsetDir}/icon_256x256@2x.png`], { stdio: "pipe" });
-  execFileSync("sips", ["-z", "1024", "1024", SOURCE, "--out", `${iconsetDir}/icon_512x512@2x.png`], { stdio: "pipe" });
+  renameSync(qlOutput, basePng);
 
-  // === 4) iconutil 打成 icns ===
+  // === 3) sips 把 base PNG 缩放到各尺寸 PNG(sips 支持 PNG,不支持 SVG) ===
+  for (const size of ICON_SIZES) {
+    execFileSync("sips", ["-z", String(size), String(size), basePng, "--out", `${iconsetDir}/icon_${size}x${size}.png`], { stdio: "pipe" });
+  }
+  // === 4) @2x 视网膜图标(必备) ===
+  execFileSync("sips", ["-z", "32", "32", basePng, "--out", `${iconsetDir}/icon_16x16@2x.png`], { stdio: "pipe" });
+  execFileSync("sips", ["-z", "64", "64", basePng, "--out", `${iconsetDir}/icon_32x32@2x.png`], { stdio: "pipe" });
+  execFileSync("sips", ["-z", "256", "256", basePng, "--out", `${iconsetDir}/icon_128x128@2x.png`], { stdio: "pipe" });
+  execFileSync("sips", ["-z", "512", "512", basePng, "--out", `${iconsetDir}/icon_256x256@2x.png`], { stdio: "pipe" });
+  execFileSync("sips", ["-z", "1024", "1024", basePng, "--out", `${iconsetDir}/icon_512x512@2x.png`], { stdio: "pipe" });
+
+  // === 5) iconutil 打成 icns ===
   execFileSync("iconutil", ["-c", "icns", iconsetDir, "-o", OUT], { stdio: "pipe" });
 
   log(`generated ${OUT} from ${SOURCE}`);

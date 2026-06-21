@@ -6,6 +6,12 @@ asar: true
 #   - dist/main/server/entry.js → spawn() 直接执行,不能压缩
 asarUnpack:
   - "dist/main/server/entry.js"
+
+# electron-builder 25+ 需要 publish provider(否则 createUpdateInfoTasks 读 .provider 崩)
+# 我们不自动发布(--publish never),这里只给 metadata 用
+publish:
+  provider: github
+  releaseType: release
 directories:
   buildResources: build
   output: dist
