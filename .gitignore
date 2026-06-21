@@ -37,3 +37,6 @@ packages/desktop/build/icon.icns.iconset/
 # Playwright e2e 测试产物(本地预览用,不入仓)
 packages/desktop/playwright-report/
 packages/desktop/test-results/
+
+# npm lockfile 异常(本项目用 pnpm;若出现说明 npm install 误用,需 rm)
+package-lock.json
