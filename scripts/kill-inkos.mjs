@@ -10,6 +10,9 @@
  *   - Win:PowerShell Get-Process + Stop-Process + Remove-Item
  *   - Mac/Linux:pkill + rm
  *
+ * 注意:Win 上不用 cmd / taskkill(会被 Git Bash MSYS 拦截 stdout 导致杀不干净),
+ *      也不用 execFileSync 包裹(同理)。PowerShell 是 native Win32 进程,绕过 MSYS。
+ *
  * 失败安全:所有 try/catch,任何步骤失败只 log 不抛错(不能因为 kill 失败
  *         阻止 dev/build 启动)。
  */
@@ -49,24 +52,31 @@ function safeExec(cmd, args) {
 }
 
 /**
- * 杀指定名字的进程(Win:taskkill via cmd,Mac/Linux:pkill)
+ * 杀指定名字的进程(Win:PowerShell Stop-Process,Mac/Linux:pkill)
  *
- * Win 上 Git Bash MSYS 会拦截 taskkill 的 stdout/stderr,导致 Node spawnSync
- * 看不到输出(像 hang 住)。解法:用 `cmd /c` 包裹,让 cmd 自己 spawn taskkill。
- * 找不到匹配时 exit 128(我们 accept 当成成功)。
+ * Win 上 Git Bash MSYS 会拦截 cmd / taskkill 的 stdout/stderr,导致 Node
+ * execFileSync 看不到输出或杀不干净。解法:spawn PowerShell(native Win32 进程,
+ * 不经过 MSYS 层),用 Get-Process + Stop-Process 原生 cmdlet。
+ * 找不到匹配时 SilentlyContinue 不报错。
  */
 function killByName(name) {
   if (isWin) {
-    return safeExec("cmd", [`//c`, `taskkill`, `/IM`, `${name}.exe`, `/F`]);
+    return safeExec("powershell", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      `Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Stop-Process -Force; exit 0`,
+    ]);
   }
   safeExec("pkill", ["-9", "-f", name]);
   return true;
 }
 
-/** 删文件,不存在不报错。del /Q /F 文件不存在时仍 exit 0 */
+/** 删文件,不存在不报错 */
 function safeUnlink(p) {
   if (isWin) {
-    return safeExec("cmd", [`//c`, `del`, `/Q`, `/F`, p]);
+    return safeExec("powershell", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      `try { Remove-Item -Path '${p}' -Force -ErrorAction Stop } catch {}; exit 0`,
+    ]);
   }
   return safeExec("rm", ["-f", p]);
 }

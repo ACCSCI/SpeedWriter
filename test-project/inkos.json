@@ -9,5 +9,23 @@
     },
     "maxConcurrentBooks": 3
   },
-  "language": "zh"
+  "language": "zh",
+  "llm": {
+    "services": [
+      {
+        "service": "deepseek",
+        "temperature": 0.7,
+        "apiFormat": "chat",
+        "stream": true
+      }
+    ],
+    "defaultModel": "deepseek-v4-flash",
+    "service": "deepseek",
+    "provider": "openai",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "temperature": 0.7,
+    "apiFormat": "chat",
+    "stream": true
+  }
 }

@@ -18,11 +18,11 @@ export function getUserDataPaths(): UserDataPaths {
   const userData = app.getPath("userData");
   const defaultProjectRoot = join(userData, "projects", "default");
   // 静态文件:生产在 resources/studio-dist/(extraResources),开发在 packages/studio/dist/
-  // 注意:process.resourcesPath 在 dev 模式下是 "" —— 用 truthy 判定而不是 ??,
-  //      否则 join("", "studio-dist") = "studio-dist"(相对路径)会让 ?? 永远不到 fallback
+  // process.resourcesPath 在 dev 模式下也有值(指向 electron 的 resources 目录),
+  // 不能用 truthy 判断;用 app.isPackaged 区分打包 vs 开发。
   const studioStaticDir =
     process.env.INKOS_STUDIO_STATIC_DIR
-    ?? (process.resourcesPath ? join(process.resourcesPath, "studio-dist") : null)
+    ?? (app.isPackaged ? join(process.resourcesPath, "studio-dist") : null)
     ?? join(import.meta.dirname, "..", "..", "..", "studio", "dist");
   return {
     userData,

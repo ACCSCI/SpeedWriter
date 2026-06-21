@@ -18,7 +18,7 @@
     "build:studio": "pnpm --filter @actalk/inkos-studio build",
     "prebuild": "npm run build:studio",
     "build:main": "tsc",
-    "build:entry": "esbuild src/server/entry.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/main/server/entry.js --external:electron --minify --banner:js=\"import { createRequire as __crq } from 'node:module'; const require = __crq(import.meta.url);\"",
+    "build:entry": "esbuild src/server/entry.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/main/server/entry.mjs --external:electron --minify --banner:js=\"import { createRequire as __crq } from 'node:module'; const require = __crq(import.meta.url);\"",
     "build:preload": "esbuild src/preload/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/preload/index.js --external:electron",
     "build": "npm run build:studio && npm run build:main && npm run build:entry && npm run build:preload",
     "predev": "node ../../scripts/kill-inkos.mjs",

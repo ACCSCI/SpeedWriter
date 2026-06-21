@@ -3,9 +3,10 @@ productName: InkOS
 copyright: Copyright © 2026 InkOS
 asar: true
 # ⚠️ 关键:必须把子进程入口从 asar 里拆出来
-#   - dist/main/server/entry.js → spawn() 直接执行,不能压缩
+#   - dist/main/server/entry.mjs → spawn() 直接执行,不能压缩
+#   - 后缀 .mjs 是 ESM 强信号,防止安装版找不到 ambient package.json 时被当 CJS 加载
 asarUnpack:
-  - "dist/main/server/entry.js"
+  - "dist/main/server/entry.mjs"
 
 # electron-builder 25+ 需要 publish provider(否则 createUpdateInfoTasks 读 .provider 崩)
 # 我们不自动发布(--publish never),这里只给 metadata 用
@@ -16,7 +17,7 @@ directories:
   buildResources: build
   output: dist
 # 极简白名单:只列我们真正需要打进 asar 的文件
-# core/studio 已被 esbuild 打进 entry.js,不需要再包含
+# core/studio 已被 esbuild 打进 entry.mjs,不需要再包含
 # 不依赖 workspace symlink(electron-builder 不解析 symlink 跨包)
 files:
   - "package.json"
@@ -31,7 +32,7 @@ files:
   - "dist/main/menu.js"
   - "dist/main/logger.js"
   - "dist/main/debug.js"
-  - "dist/main/server/entry.js"
+  - "dist/main/server/entry.mjs"
   - "dist/preload/index.js"
   - "!**/*.{md,markdown}"
   - "!**/{__tests__,test,tests,examples,docs}/**"

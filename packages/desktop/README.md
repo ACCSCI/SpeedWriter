@@ -86,7 +86,7 @@ packages/desktop/
 ├── electron-builder.yml    # 三平台打包配置(无签名,无公证)
 └── dist/
     ├── main/               # tsc 产物
-    └── main/server/entry.js # esbuild 打包(5MB,含 core + studio)
+    └── main/server/entry.mjs # esbuild 打包(5MB,含 core + studio)
 ```
 
 ## 已知限制

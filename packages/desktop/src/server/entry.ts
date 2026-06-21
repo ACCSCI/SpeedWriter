@@ -1,6 +1,6 @@
 /**
  * Hono server 子进程入口
- * - 由 esbuild --bundle 打成单文件 dist/main/server/entry.js
+ * - 由 esbuild --bundle 打成单文件 dist/main/server/entry.mjs(用 .mjs 强 ESM)
  * - 消费 INKOS_SECRET_* env(主进程注入的解密 LLM Key),写到 root/.inkos/secrets.json
  * - 调 startStudioServer(root, port, { staticDir })
  */
