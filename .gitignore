@@ -29,3 +29,11 @@ worlds/
 inkos.json
 prompt/
 CLAUDE.md
+
+# 生成的图标(由 scripts/generate-mac-icon.mjs 在 macOS 上现场产出)
+packages/desktop/build/icon.icns
+packages/desktop/build/icon.icns.iconset/
+
+# Playwright e2e 测试产物(本地预览用,不入仓)
+packages/desktop/playwright-report/
+packages/desktop/test-results/

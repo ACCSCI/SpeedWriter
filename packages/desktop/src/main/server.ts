@@ -6,6 +6,7 @@
  * - waitForReady 探活 /api/v1/health
  * - stop() SIGTERM + tree-kill 兜底
  * - restart() stop + 重新 spawn(供 secrets:set 用)
+ * - onUnexpectedExit() 异常退出时通知 main 进程(避免 renderer 跟着 crash)
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
@@ -23,6 +24,7 @@ export interface ServerHandle {
   killed: boolean;
   stop(): Promise<void>;
   restart(): Promise<ServerHandle>;
+  onUnexpectedExit(cb: (info: { code: number | null; signal: NodeJS.Signals | null; port: number }) => void): void;
 }
 
 export interface StartServerOptions {
@@ -57,7 +59,23 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
 
   child.stdout?.on("data", (b) => log("info", `[server] ${b.toString().trim()}`));
   child.stderr?.on("data", (b) => log("error", `[server] ${b.toString().trim()}`));
-  child.on("exit", (code, signal) => log("warn", `[server] exited code=${code} signal=${signal}`));
+
+  // 异常退出检测:正常退出(code=0 / SIGTERM/SIGKILL 由我们触发)不通知 main;
+  // 其他情况(Hono OOM、未捕获异常、被 OS 杀)→ 通知 main 触发自动重启 + 刷新 renderer URL
+  let unexpectedExitCallbacks: Array<(info: { code: number | null; signal: NodeJS.Signals | null; port: number }) => void> = [];
+  let handleRef: ServerHandle | null = null;   // 提前声明,exit 闭包引用时已赋值
+  child.on("exit", (code, signal) => {
+    log("warn", `[server] exited code=${code} signal=${signal}`);
+    const wasKilledByUs = handleRef ? handleRef.killed : true;
+    const isNormalExit = code === 0 || signal === "SIGTERM" || signal === "SIGKILL";
+    if (wasKilledByUs || isNormalExit) return;
+    log("error", `[server] unexpected exit — code=${code} signal=${signal} port=${port}`);
+    for (const cb of unexpectedExitCallbacks) {
+      try { cb({ code, signal, port }); } catch (e) {
+        log("error", `[server] unexpectedExit callback threw: ${e}`);
+      }
+    }
+  });
 
   const url = `http://127.0.0.1:${port}`;
   await waitForReady(url);
@@ -100,7 +118,11 @@ export async function startServer(opts: StartServerOptions): Promise<ServerHandl
       await handle.stop();
       return startServer(opts);
     },
+    onUnexpectedExit(cb) {
+      unexpectedExitCallbacks.push(cb);
+    },
   };
+  handleRef = handle;
   return handle;
 }
 

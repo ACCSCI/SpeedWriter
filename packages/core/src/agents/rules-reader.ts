@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,7 +6,28 @@ import { parseGenreProfile, type ParsedGenreProfile } from "../models/genre-prof
 import { parseBookRules, tryParseBookRulesFrontmatter, type ParsedBookRules } from "../models/book-rules.js";
 import { BookConfigSchema } from "../models/book.js";
 
-const BUILTIN_GENRES_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../genres");
+/**
+ * Locate the directory holding the built-in genre profiles.
+ *
+ * - Electron packaged app: read from `process.resourcesPath/core-genres/`,
+ *   which electron-builder copies in via `extraResources`. We probe for a
+ *   sentinel file (`other.md`) so dev mode falls through cleanly.
+ * - Everywhere else (CLI, tests, tsx watch, plain Node): resolve relative
+ *   to this module's source file, i.e. `<repo>/packages/core/genres/`.
+ */
+function resolveBuiltinGenresDir(): string {
+  if (typeof process !== "undefined" && process.versions?.electron) {
+    // Electron adds `process.resourcesPath` at runtime; not in @types/node.
+    const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    const electronDir = join(resourcesPath ?? "", "core-genres");
+    if (existsSync(join(electronDir, "other.md"))) {
+      return electronDir;
+    }
+  }
+  return join(dirname(fileURLToPath(import.meta.url)), "../../genres");
+}
+
+const BUILTIN_GENRES_DIR = resolveBuiltinGenresDir();
 
 async function tryReadFile(path: string): Promise<string | null> {
   try {

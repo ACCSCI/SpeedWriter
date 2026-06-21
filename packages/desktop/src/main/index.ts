@@ -75,6 +75,39 @@ app.whenReady().then(async () => {
     });
     log("info", `Local server ready at ${serverHandle.url}`);
 
+    // 3.5) 注册 server 异常退出回调:Hono 子进程崩了不杀 renderer,
+    //      自动 restart 一次 + 通知 renderer 重新加载(server URL 可能换 port)
+    serverHandle.onUnexpectedExit((info) => {
+      log("error", `[startup] server crashed (code=${info.code} signal=${info.signal} port=${info.port}) — auto-restarting`);
+      void (async () => {
+        try {
+          if (serverHandle) await serverHandle.stop();
+          serverHandle = await startServer({
+            projectRoot: paths.defaultProjectRoot,
+            staticDir: paths.studioStaticDir,
+            secrets: cachedSecrets,
+          });
+          // 重新注册回调(新 handle 的回调列表是空的)
+          registerServerAutoRestart();
+          log("info", `[startup] server restarted at ${serverHandle.url}`);
+          // 通知 renderer 重新加载
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("server:restarted", { url: serverHandle.url });
+            mainWindow.webContents.loadURL(serverHandle.url);
+          }
+        } catch (e) {
+          log("error", `[startup] server auto-restart failed: ${e}`);
+        }
+      })();
+    });
+    function registerServerAutoRestart() {
+      if (!serverHandle) return;
+      serverHandle.onUnexpectedExit((info) => {
+        log("error", `[startup] server crashed again (code=${info.code}) — giving up auto-restart`);
+        // 只 log,不无限重启(防止 OOM / 配置错导致 spawn 风暴)
+      });
+    }
+
     // 4) 创建窗口
     mainWindow = createMainWindow(serverHandle.url);
 

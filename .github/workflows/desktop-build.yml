@@ -121,6 +121,12 @@ jobs:
             Remove-Item -Force packages/desktop/dist/InkOS*.exe.blockmap
           }
 
+      - name: Generate Mac icon
+        # 从 assets/logo.svg 渲染多分辨率 PNG 后打成 icns
+        # electron-builder --mac 必需 build/icon.icns(macOS 自带 sips + iconutil)
+        if: runner.os == 'macOS'
+        run: node scripts/generate-mac-icon.mjs
+
       - name: Package ${{ matrix.target }}
         run: pnpm --filter @actalk/inkos-desktop ${{ matrix.build_script }}
         env:

@@ -1650,6 +1650,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   app.use("/*", cors());
 
+  // === 健康检查(Electron waitForReady 探活,无副作用) ===
+  app.get("/api/v1/health", (c) => c.json({ ok: true, ts: Date.now() }));
+
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
     if (error instanceof ApiError) {
@@ -4698,10 +4701,31 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     const { existsSync } = await import("node:fs");
     const { GLOBAL_ENV_PATH } = await import("@actalk/inkos-core");
 
-    const checks = {
+    // Runtime detection — Electron desktop injects ELECTRON_RUN_AS_NODE=1 into
+    // the child that hosts this server (see packages/desktop/src/main/server.ts).
+    // In Electron mode the Studio API's effective LLM config always comes from
+    // `root/.inkos/secrets.json` (decrypted via Electron safeStorage), not from
+    // legacy .env files, so .env presence checks are not meaningful signals
+    // for those users. Report them as `null` and surface `secretsFile` instead.
+    const runtime: "electron" | "node" = process.env.ELECTRON_RUN_AS_NODE === "1"
+      ? "electron"
+      : "node";
+
+    const checks: {
+      runtime: "electron" | "node";
+      inkosJson: boolean;
+      projectEnv: boolean | null;
+      globalEnv: boolean | null;
+      secretsFile: boolean | null;
+      booksDir: boolean;
+      llmConnected: boolean;
+      bookCount: number;
+    } = {
+      runtime,
       inkosJson: existsSync(join(root, "inkos.json")),
-      projectEnv: existsSync(join(root, ".env")),
-      globalEnv: existsSync(GLOBAL_ENV_PATH),
+      projectEnv: runtime === "electron" ? null : existsSync(join(root, ".env")),
+      globalEnv: runtime === "electron" ? null : existsSync(GLOBAL_ENV_PATH),
+      secretsFile: runtime === "electron" ? existsSync(join(root, ".inkos", "secrets.json")) : null,
       booksDir: existsSync(join(root, "books")),
       llmConnected: false,
       bookCount: 0,

@@ -50,6 +50,14 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # 正式分发时打开签名 + 公证(需 Apple Developer ID,$99/年):
+  #   export CSC_LINK="$HOME/DeveloperID_Application.p12"
+  #   export CSC_KEY_PASSWORD='p12-password'
+  #   export APPLE_ID='you@apple.com'
+  #   export APPLE_APP_SPECIFIC_PASSWORD='abcd-efgh-ijkl-mnop'
+  #   export APPLE_TEAM_ID='ABCDE12345'
+  # notarizeWith: 'electron-builder-notarize'  # 或直接用 notarytool
+  # 当前 CI 用 CSC_IDENTITY_AUTO_DISCOVERY=false,产物未签名 → Gatekeeper 首次需右键"打开"
 
 # === Windows ===
 win:
@@ -79,6 +87,8 @@ nsis:
   installerLanguages: ["en_US", "zh_CN", "ja_JP"]
 
 # === DMG ===
+# icon.icns 是由 scripts/generate-mac-icon.mjs 在 macOS 上从 assets/logo.svg 生成的
+# (本地不入仓、CI 在 macos-14 runner 上跑);其他平台开发时 dmg.icon 缺失不阻塞 Win/Linux 打包
 dmg:
   title: "${productName} ${version}"
   icon: build/icon.icns

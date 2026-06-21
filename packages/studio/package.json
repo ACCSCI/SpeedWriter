@@ -5,6 +5,16 @@
   "type": "module",
   "main": "dist/api/index.js",
   "types": "dist/api/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api/server.d.ts",
+      "import": "./dist/api/server.js"
+    }
+  },
   "files": [
     "dist",
     "!dist/**/*.test.*"

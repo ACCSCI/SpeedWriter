@@ -27,6 +27,9 @@ import { useI18n } from "./hooks/use-i18n";
 import { postApi, putApi, useApi } from "./hooks/use-api";
 import { Sun, Moon } from "lucide-react";
 import { House } from "lucide-react";
+import { UpdateBanner } from "./components/UpdateBanner";
+import { PlatformProvider, useChrome } from "./components/PlatformProvider";
+import { TitleBar } from "./components/TitleBar";
 
 export type { HashRoute as Route } from "./hooks/use-hash-route";
 
@@ -40,15 +43,32 @@ export function isBookCreateChatRoute(route: HashRoute): boolean {
 }
 
 export function App() {
+  return (
+    <PlatformProvider>
+      <AppInner />
+    </PlatformProvider>
+  );
+}
+
+function AppInner() {
   const { route, setRoute } = useHashRoute();
+  const { chrome } = useChrome();
   const sse = useSSE();
   const { theme, setTheme } = useTheme();
   const { t, lang: currentLang } = useI18n();
   const { data: project, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [ready, setReady] = useState(false);
+  // 全屏时隐藏自定义标题栏(Win/Linux),让 OS 自己接管;macOS 路径根本不渲染 TitleBar
+  const [fullscreen, setFullscreen] = useState(false);
 
   const isDark = theme === "dark";
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.inkos) return;
+    const off = window.inkos.onFullscreenChanged(setFullscreen);
+    return off;
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -117,55 +137,28 @@ export function App() {
 
   return (
     <div className="h-screen bg-background text-foreground flex overflow-hidden font-sans">
-      {/* Left Sidebar */}
-      <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
+      <div className="flex flex-col w-full">
+        <UpdateBanner />
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left Sidebar */}
+          <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
 
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/30 backdrop-blur-sm">
-        {/* Header Strip */}
-        <header className="h-14 shrink-0 flex items-center justify-between px-8 border-b border-border/40">
-          <div className="flex items-center gap-2">
-             <button
-               onClick={nav.toDashboard}
-               className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-card/70 px-3.5 py-2 text-[17px] font-semibold text-foreground hover:bg-secondary/50 transition-colors"
-             >
-               <House size={18} />
-               <span>首页</span>
-               <span className="text-muted-foreground/70">/</span>
-               <span className="font-serif">InkOS Studio</span>
-             </button>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="flex gap-0.5 bg-muted/50 rounded-lg p-0.5">
-              <button
-                onClick={async () => {
-                  await putApi("/project", { language: "zh" });
-                  refetchProject();
-                }}
-                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "zh" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
-              >
-                中
-              </button>
-              <button
-                onClick={async () => {
-                  await putApi("/project", { language: "en" });
-                  refetchProject();
-                }}
-                className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "en" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
-              >
-                EN
-              </button>
-            </div>
-
-            <button
-              onClick={() => setTheme(isDark ? "light" : "dark")}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {isDark ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
-          </div>
-        </header>
+        {/* Title bar / header strip:Win/Linux 用 TitleBar(自定义),macOS 用原生 header + 交通灯 */}
+        {!fullscreen && chrome === "custom" && <TitleBar />}
+        {!fullscreen && chrome === "native" && (
+          <InlineHeader
+            nav={nav}
+            currentLang={currentLang}
+            isDark={isDark}
+            onLangChange={async (lang) => {
+              await putApi("/project", { language: lang });
+              refetchProject();
+            }}
+            onThemeToggle={() => setTheme(isDark ? "light" : "dark")}
+          />
+        )}
 
         {/* Main Content Area */}
         <main className="flex-1 relative overflow-y-auto scroll-smooth">
@@ -282,6 +275,68 @@ export function App() {
           )}
         </main>
       </div>
+        </div>
+      </div>
     </div>
+  );
+}
+
+/**
+ * macOS 路径保留的旧 header strip:面包屑 pill + 语言切换 + 主题切换。
+ * Win/Linux 不渲染这个,改用 TitleBar。
+ */
+function InlineHeader({
+  nav,
+  currentLang,
+  isDark,
+  onLangChange,
+  onThemeToggle,
+}: {
+  nav: {
+    toDashboard: () => void;
+  };
+  currentLang: "zh" | "en";
+  isDark: boolean;
+  onLangChange: (lang: "zh" | "en") => void | Promise<void>;
+  onThemeToggle: () => void;
+}) {
+  return (
+    <header className="h-14 shrink-0 flex items-center justify-between px-8 border-b border-border/40">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={nav.toDashboard}
+          className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-card/70 px-3.5 py-2 text-[17px] font-semibold text-foreground hover:bg-secondary/50 transition-colors"
+        >
+          <House size={18} />
+          <span>首页</span>
+          <span className="text-muted-foreground/70">/</span>
+          <span className="font-serif">InkOS Studio</span>
+        </button>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <div className="flex gap-0.5 bg-muted/50 rounded-lg p-0.5">
+          <button
+            onClick={() => { void onLangChange("zh"); }}
+            className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "zh" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+          >
+            中
+          </button>
+          <button
+            onClick={() => { void onLangChange("en"); }}
+            className={`px-2.5 py-1 text-[16px] font-medium rounded-md ${currentLang === "en" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+          >
+            EN
+          </button>
+        </div>
+
+        <button
+          onClick={onThemeToggle}
+          className="text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {isDark ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
+      </div>
+    </header>
   );
 }

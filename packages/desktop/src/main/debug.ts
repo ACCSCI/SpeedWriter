@@ -19,6 +19,7 @@
  */
 import { app, BrowserWindow, session } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const SCREENSHOT_DELAYS_MS = [0, 2000, 5000, 12000];
@@ -165,9 +166,8 @@ export async function attachDebugMonitor(win: BrowserWindow): Promise<void> {
   // 进程退出兜底再写一次
   const flushSync = () => {
     try {
-      const fs = require("node:fs") as typeof import("node:fs");
-      fs.writeFileSync(consoleLogPath, consoleLines.join("\n"), "utf-8");
-      fs.writeFileSync(networkLogPath, networkLines.join("\n"), "utf-8");
+      writeFileSync(consoleLogPath, consoleLines.join("\n"), "utf-8");
+      writeFileSync(networkLogPath, networkLines.join("\n"), "utf-8");
       console.log(`[debug] emergency flush on exit`);
     } catch {
       // ignore

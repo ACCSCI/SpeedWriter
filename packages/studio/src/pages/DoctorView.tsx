@@ -5,9 +5,13 @@ import { useColors } from "../hooks/use-colors";
 import { Stethoscope, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
 interface DoctorChecks {
+  readonly runtime: "electron" | "node";
   readonly inkosJson: boolean;
-  readonly projectEnv: boolean;
-  readonly globalEnv: boolean;
+  // `null` means "not applicable in this runtime" (e.g. .env files in Electron
+  // mode where LLM config lives in `root/.inkos/secrets.json`).
+  readonly projectEnv: boolean | null;
+  readonly globalEnv: boolean | null;
+  readonly secretsFile: boolean | null;
   readonly booksDir: boolean;
   readonly llmConnected: boolean;
   readonly bookCount: number;
@@ -29,9 +33,28 @@ function CheckRow({ label, ok, detail }: { label: string; ok: boolean; detail?: 
   );
 }
 
+// `null` fields = "not applicable in this runtime" — don't render the row at all.
+function OptionalCheckRow({ label, value, detail }: { label: string; value: boolean | null; detail?: string }) {
+  if (value === null) return null;
+  return <CheckRow label={label} ok={value} detail={detail} />;
+}
+
 export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const { data, refetch } = useApi<DoctorChecks>("/doctor");
+
+  // Runtime-aware "all passed" gate:
+  //   - Node mode: needs at least one .env (project OR global) — legacy config path
+  //   - Electron mode: needs `root/.inkos/secrets.json` — LLM key comes from
+  //     Electron safeStorage, .env files are not used
+  const configReachable = data
+    ? (data.runtime === "electron"
+        ? data.secretsFile === true
+        : data.projectEnv === true || data.globalEnv === true)
+    : false;
+  const allPassed = data
+    ? data.inkosJson && configReachable && data.llmConnected
+    : false;
 
   return (
     <div className="space-y-8">
@@ -58,8 +81,9 @@ export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
       ) : (
         <div className={`border ${c.cardStatic} rounded-lg p-5`}>
           <CheckRow label={t("doctor.inkosJson")} ok={data.inkosJson} />
-          <CheckRow label={t("doctor.projectEnv")} ok={data.projectEnv} />
-          <CheckRow label={t("doctor.globalEnv")} ok={data.globalEnv} />
+          <OptionalCheckRow label={t("doctor.projectEnv")} value={data.projectEnv} />
+          <OptionalCheckRow label={t("doctor.globalEnv")} value={data.globalEnv} />
+          <OptionalCheckRow label={t("doctor.secretsFile")} value={data.secretsFile} />
           <CheckRow label={t("doctor.booksDir")} ok={data.booksDir} detail={`${data.bookCount} book(s)`} />
           <CheckRow label={t("doctor.llmApi")} ok={data.llmConnected} detail={data.llmConnected ? t("doctor.connected") : t("doctor.failed")} />
         </div>
@@ -67,11 +91,11 @@ export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
 
       {data && (
         <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
-          data.inkosJson && (data.projectEnv || data.globalEnv) && data.llmConnected
+          allPassed
             ? "bg-emerald-500/10 text-emerald-600"
             : "bg-amber-500/10 text-amber-600"
         }`}>
-          {data.inkosJson && (data.projectEnv || data.globalEnv) && data.llmConnected
+          {allPassed
             ? t("doctor.allPassed")
             : t("doctor.someFailed")
           }

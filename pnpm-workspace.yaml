@@ -1,2 +1,7 @@
 packages:
   - "packages/*"
+
+# pnpm v10 默认忽略 postinstall 脚本;electron 必须跑 install.js 下载真正的二进制,
+# 否则启动会报 "Electron failed to install correctly"。
+onlyBuiltDependencies:
+  - electron

@@ -3,7 +3,7 @@
 > **版本**:v1.1(2026-06-21)
 > **变更**:v1.0 → v1.1 — **移除 CI 必须配 INKOS_LLM_API_KEY 的硬性要求**,改为可选;release job 不再依赖 llm;新增 §15 密钥安全审计
 > **目标**:在 GitHub Actions 上**全量自动化**出 macOS / Windows / Linux 三端安装包,Tag 推送即发布到 GitHub Release,用户下载即用
-> **配套文档**:`ELECTRON_DESKTOP.md`(Electron 本体) · `scripts/verify-desktop.sh`(本机一键验证)
+> **配套文档**:[desktop-packaging.md](./desktop-packaging.md)(Electron 本体) · `scripts/verify-desktop.sh`(本机一键验证)
 > **代码现状**:本机 `dist:win` 已成功出过 `InkOS Setup 1.5.0.exe`(81M),三平台 e2e 绿灯
 
 ---
