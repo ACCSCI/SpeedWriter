@@ -15,5 +15,5 @@ export {
   createGrepTool,
   createLsTool,
 } from "./agent-tools.js";
-export { runAgentSession, evictAgentCache, type AgentSessionConfig, type AgentSessionResult } from "./agent-session.js";
+export { runAgentSession, evictAgentCache, getAgentForSession, type AgentSessionConfig, type AgentSessionResult } from "./agent-session.js";
 export { createBookContextTransform } from "./context-transform.js";

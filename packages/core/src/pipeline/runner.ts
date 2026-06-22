@@ -267,6 +267,14 @@ export interface PipelineConfig {
   readonly logger?: Logger;
   readonly onStreamProgress?: OnStreamProgress;
   readonly onContextCompression?: ContextCompressionCallback;
+  readonly onImportProgress?: (event: ImportProgressEvent) => void;
+}
+
+export interface ImportProgressEvent {
+  readonly step: "foundation" | "style" | "analyze" | "done";
+  readonly current?: number;
+  readonly total?: number;
+  readonly message?: string;
 }
 
 export interface TokenUsageSummary {
@@ -1648,6 +1656,14 @@ export class PipelineRunner {
     const { readBookRules } = await import("../agents/rules-reader.js");
     const parsedBookRules = (await readBookRules(bookDir))?.rules ?? null;
 
+    // Create temporary snapshot for rollback on abort
+    let preGenSnapshotDir: string | undefined;
+    try {
+      preGenSnapshotDir = await this.state.snapshotStateTemporary(bookId, chapterNumber);
+    } catch {
+      // Non-fatal: continue without snapshot (rollback won't be available)
+    }
+
     // 1. Write chapter
     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
     this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
@@ -1963,6 +1979,12 @@ export class PipelineRunner {
       logSnapshotStage: () =>
         this.logStage(stageLanguage, { zh: "更新章节索引与快照", en: "updating chapter index and snapshots" }),
     });
+
+    // Clean up the temporary pre-generation snapshot after successful persistence
+    if (preGenSnapshotDir) {
+      const { rm } = await import("node:fs/promises");
+      await rm(preGenSnapshotDir, { recursive: true, force: true }).catch(() => undefined);
+    }
 
     // 6. Send notification
     if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
@@ -2650,8 +2672,11 @@ ${matrix}`,
 
       const log = this.config.logger?.child("import");
 
+      const onProgress = this.config.onImportProgress;
+
       // Step 1: Generate foundation on first run (not on resume)
       if (startFrom === 1) {
+        onProgress?.({ step: "foundation", total: input.chapters.length });
         log?.info(this.localize(resolvedLanguage, {
           zh: `步骤 1：从 ${input.chapters.length} 章生成基础设定...`,
           en: `Step 1: Generating foundation from ${input.chapters.length} chapters...`,
@@ -2682,6 +2707,7 @@ ${matrix}`,
 
         // Generate style guide from imported chapters
         if (foundationSource.length >= 500) {
+          onProgress?.({ step: "style", total: input.chapters.length });
           log?.info(this.localize(resolvedLanguage, {
             zh: "提取原文风格指纹...",
             en: "Extracting source style fingerprint...",
@@ -2709,6 +2735,7 @@ ${matrix}`,
       for (let i = startFrom - 1; i < input.chapters.length; i++) {
         const ch = input.chapters[i]!;
         const chapterNumber = i + 1;
+        onProgress?.({ step: "analyze", current: chapterNumber, total: input.chapters.length });
         const governedInput = await this.prepareWriteInput(book, bookDir, chapterNumber);
 
         log?.info(this.localize(resolvedLanguage, {
@@ -2782,6 +2809,7 @@ ${matrix}`,
       }
 
       const nextChapter = input.chapters.length + 1;
+      onProgress?.({ step: "done", total: input.chapters.length });
       log?.info(this.localize(resolvedLanguage, {
         zh: `完成。已导入 ${importedCount} 章，共 ${formatLengthCount(totalWords, countingMode)}。下一章：${nextChapter}`,
         en: `Done. ${importedCount} chapters imported, ${formatLengthCount(totalWords, countingMode)}. Next chapter: ${nextChapter}`,
@@ -3607,5 +3635,17 @@ ${matrix}`,
     const lines = raw.split("\n");
     const contentStart = lines.findIndex((l, i) => i > 0 && l.trim().length > 0);
     return contentStart >= 0 ? lines.slice(contentStart).join("\n") : raw;
+  }
+
+  /**
+   * Roll back partial generation by restoring from a temporary snapshot.
+   * Called when a generation is aborted mid-way.
+   */
+  async rollbackPartialGeneration(
+    bookId: string,
+    chapterNumber: number,
+    snapshotDir: string,
+  ): Promise<void> {
+    await this.state.rollbackPartialGeneration(bookId, chapterNumber, snapshotDir);
   }
 }

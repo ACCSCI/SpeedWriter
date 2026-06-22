@@ -871,6 +871,172 @@ describe("agent deterministic writing tools", () => {
     }
   });
 
+  it("blocks write_truth_file from creating new role files when roleLock.preventAdd is true", async () => {
+    await writeFile(
+      join(state.bookDir("harbor"), "story", "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: true
+  preventDelete: false
+  lockedRoles: []
+---
+`,
+      "utf-8",
+    );
+
+    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const result = await tool.execute("tool-truth-role-add", {
+      fileName: "roles/主要角色/新增角色.md",
+      content: "# 新增角色\n",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("role_lock_denied");
+      expect(result.content[0].text).toContain("preventAdd");
+    }
+    await expect(
+      access(join(state.bookDir("harbor"), "story", "roles", "主要角色", "新增角色.md")),
+    ).rejects.toThrow();
+  });
+
+  it("blocks write_truth_file from editing a role file that is locked", async () => {
+    const rolePath = join(state.bookDir("harbor"), "story", "roles", "主要角色", "林月.md");
+    await mkdir(join(state.bookDir("harbor"), "story", "roles", "主要角色"), { recursive: true });
+    await writeFile(rolePath, "# 林月\n\n守住码头账册。\n", "utf-8");
+
+    await writeFile(
+      join(state.bookDir("harbor"), "story", "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: false
+  preventDelete: false
+  lockedRoles:
+    - path: "主要角色/林月.md"
+      locked: true
+---
+`,
+      "utf-8",
+    );
+
+    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const result = await tool.execute("tool-truth-role-edit", {
+      fileName: "roles/主要角色/林月.md",
+      content: "# 林月\n\n偷偷改写。\n",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("role_lock_denied");
+      expect(result.content[0].text).toContain("已被锁定");
+    }
+    await expect(readFile(rolePath, "utf-8")).resolves.toContain("守住码头账册");
+  });
+
+  it("still allows write_truth_file to edit an unlocked role file when roleLock is configured", async () => {
+    const rolePath = join(state.bookDir("harbor"), "story", "roles", "主要角色", "林月.md");
+    await mkdir(join(state.bookDir("harbor"), "story", "roles", "主要角色"), { recursive: true });
+    await writeFile(rolePath, "# 林月\n\n守住码头账册。\n", "utf-8");
+
+    await writeFile(
+      join(state.bookDir("harbor"), "story", "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: false
+  preventDelete: true
+  lockedRoles:
+    - path: "次要角色/王五.md"
+      locked: true
+---
+`,
+      "utf-8",
+    );
+
+    const tool = createWriteTruthFileTool({} as never, root, "harbor");
+    const result = await tool.execute("tool-truth-role-ok", {
+      fileName: "roles/主要角色/林月.md",
+      content: "# 林月\n\n最新内容。\n",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).not.toContain("role_lock_denied");
+    }
+    await expect(readFile(rolePath, "utf-8")).resolves.toContain("最新内容");
+  });
+
+  it("blocks rename_entity when roleLock.preventAdd or roleLock.preventDelete is on", async () => {
+    await mkdir(join(state.bookDir("harbor"), "story", "roles", "主要角色"), { recursive: true });
+    await writeFile(
+      join(state.bookDir("harbor"), "story", "roles", "主要角色", "林月.md"),
+      "# 林月\n",
+      "utf-8",
+    );
+
+    await writeFile(
+      join(state.bookDir("harbor"), "story", "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: false
+  preventDelete: true
+  lockedRoles: []
+---
+`,
+      "utf-8",
+    );
+
+    const tool = createRenameEntityTool({} as never, root, "harbor");
+    const result = await tool.execute("tool-rename-locked", {
+      oldValue: "林月",
+      newValue: "张月",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("role_lock_denied");
+    }
+  });
+
+  it("blocks rename_entity when the source role itself is locked", async () => {
+    await mkdir(join(state.bookDir("harbor"), "story", "roles", "主要角色"), { recursive: true });
+    await writeFile(
+      join(state.bookDir("harbor"), "story", "roles", "主要角色", "林月.md"),
+      "# 林月\n",
+      "utf-8",
+    );
+
+    await writeFile(
+      join(state.bookDir("harbor"), "story", "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: false
+  preventDelete: false
+  lockedRoles:
+    - path: "主要角色/林月.md"
+      locked: true
+---
+`,
+      "utf-8",
+    );
+
+    const tool = createRenameEntityTool({} as never, root, "harbor");
+    const result = await tool.execute("tool-rename-source-locked", {
+      oldValue: "林月",
+      newValue: "张月",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("role_lock_denied");
+      expect(result.content[0].text).toContain("已被锁定");
+    }
+  });
+
   it("persists Play world, visual, player persona, and entity edits without advancing a turn", async () => {
     const store = new PlayStore(root);
     await store.createWorld({

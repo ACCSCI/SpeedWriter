@@ -23,6 +23,19 @@ const EraConstraintsSchema = z.object({
   region: z.string().optional(),
 }).optional();
 
+const RoleLockEntrySchema = z.object({
+  path: z.string(),
+  locked: z.boolean().default(false),
+});
+
+const RoleLockSchema = z.object({
+  preventAdd: z.boolean().default(false),
+  preventDelete: z.boolean().default(false),
+  lockedRoles: z.array(RoleLockEntrySchema).default([]),
+}).optional();
+
+export type RoleLock = z.infer<typeof RoleLockSchema>;
+
 export const BookRulesSchema = z.object({
   version: z.string().default("1.0"),
   protagonist: ProtagonistSchema,
@@ -40,6 +53,7 @@ export const BookRulesSchema = z.object({
   enableFullCastTracking: z.boolean().default(false),
   fanficMode: z.enum(["canon", "au", "ooc", "cp"]).optional(),
   allowedDeviations: z.array(z.string()).default([]),
+  roleLock: RoleLockSchema,
 });
 
 export type BookRules = z.infer<typeof BookRulesSchema>;
@@ -65,6 +79,26 @@ export function isBookRulesShim(raw: string): boolean {
     || /本文件仅为外部读取保留/.test(raw)
     || /This file is kept for external readers only/.test(raw)
   );
+}
+
+/**
+ * Check if a specific role file is locked according to book rules.
+ * @param rules - Parsed book rules
+ * @param rolePath - Relative role path, e.g. "主要角色/张三.md"
+ */
+export function isRoleLocked(rules: BookRules, rolePath: string): boolean {
+  const roleLock = rules.roleLock;
+  if (!roleLock) return false;
+  return roleLock.lockedRoles.some(
+    (entry) => entry.locked && (entry.path === rolePath || rolePath.endsWith(entry.path)),
+  );
+}
+
+/**
+ * Get the role lock config with defaults applied.
+ */
+export function getRoleLock(rules: BookRules): NonNullable<RoleLock> {
+  return rules.roleLock ?? { preventAdd: false, preventDelete: false, lockedRoles: [] };
 }
 
 export function parseBookRules(raw: string): ParsedBookRules | null {

@@ -550,6 +550,134 @@ export class StateManager {
     return discarded;
   }
 
+  /**
+   * Create a temporary snapshot before generation starts.
+   * This allows rollback if generation is aborted mid-way.
+   * Returns the snapshot directory path for later cleanup.
+   */
+  async snapshotStateTemporary(bookId: string, chapterNumber: number): Promise<string> {
+    const bookDir = this.bookDir(bookId);
+    const storyDir = join(bookDir, "story");
+    const snapshotDir = join(storyDir, "snapshots", `pre-gen-${chapterNumber}`);
+    await mkdir(snapshotDir, { recursive: true });
+
+    const files = [
+      "current_state.md", "particle_ledger.md", "pending_hooks.md",
+      "chapter_summaries.md", "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
+    ];
+    await Promise.all(
+      files.map(async (f) => {
+        try {
+          const content = await readFile(join(storyDir, f), "utf-8");
+          await writeFile(join(snapshotDir, f), content, "utf-8");
+        } catch {
+          // file doesn't exist yet
+        }
+      }),
+    );
+
+    const stateDir = join(bookDir, "story", "state");
+    const snapshotStateDir = join(snapshotDir, "state");
+    try {
+      const stateFiles = await readdir(stateDir);
+      if (stateFiles.length > 0) {
+        await mkdir(snapshotStateDir, { recursive: true });
+        await Promise.all(
+          stateFiles.map(async (fileName) => {
+            const content = await readFile(join(stateDir, fileName), "utf-8");
+            await writeFile(join(snapshotStateDir, fileName), content, "utf-8");
+          }),
+        );
+      }
+    } catch {
+      // state directory missing — skip
+    }
+
+    return snapshotDir;
+  }
+
+  /**
+   * Roll back partial generation by restoring from a temporary snapshot.
+   * Cleans up any partially written chapter files.
+   */
+  async rollbackPartialGeneration(
+    bookId: string,
+    chapterNumber: number,
+    snapshotDir: string,
+  ): Promise<void> {
+    const bookDir = this.bookDir(bookId);
+    const storyDir = join(bookDir, "story");
+
+    // Restore truth files from the temporary snapshot
+    const files = [
+      "current_state.md", "particle_ledger.md", "pending_hooks.md",
+      "chapter_summaries.md", "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
+    ];
+    const requiredFiles = ["current_state.md", "pending_hooks.md"];
+    const optionalFiles = files.filter((f) => !requiredFiles.includes(f));
+
+    await Promise.all(
+      requiredFiles.map(async (f) => {
+        try {
+          const content = await readFile(join(snapshotDir, f), "utf-8");
+          await writeFile(join(storyDir, f), content, "utf-8");
+        } catch {
+          // snapshot file missing — leave current state
+        }
+      }),
+    );
+
+    await Promise.all(
+      optionalFiles.map(async (f) => {
+        const targetPath = join(storyDir, f);
+        try {
+          const content = await readFile(join(snapshotDir, f), "utf-8");
+          await writeFile(targetPath, content, "utf-8");
+        } catch {
+          // snapshot file missing — leave current state
+        }
+      }),
+    );
+
+    // Restore structured state
+    const stateDir = join(bookDir, "story", "state");
+    try {
+      const snapshotStateDir = join(snapshotDir, "state");
+      const stateFiles = await readdir(snapshotStateDir);
+      if (stateFiles.length > 0) {
+        await mkdir(stateDir, { recursive: true });
+        await Promise.all(
+          stateFiles.map(async (fileName) => {
+            const content = await readFile(join(snapshotStateDir, fileName), "utf-8");
+            await writeFile(join(stateDir, fileName), content, "utf-8");
+          }),
+        );
+      }
+    } catch {
+      // snapshot structured state missing — skip
+    }
+
+    // Delete any partially written chapter file
+    const chaptersDir = join(bookDir, "chapters");
+    try {
+      const chapterFile = join(chaptersDir, `${String(chapterNumber).padStart(4, "0")}_*.md`);
+      const { glob } = await import("node:fs/promises");
+      // Use readdir to find and delete matching files
+      const files = await readdir(chaptersDir);
+      const prefix = `${String(chapterNumber).padStart(4, "0")}_`;
+      for (const file of files) {
+        if (file.startsWith(prefix) && file.endsWith(".md")) {
+          await rm(join(chaptersDir, file), { force: true });
+        }
+      }
+    } catch {
+      // chapters directory missing — skip
+    }
+
+    // Clean up the temporary snapshot
+    await rm(snapshotDir, { recursive: true, force: true });
+  }
+
   private async writeIfMissing(path: string, content: string): Promise<void> {
     try {
       await stat(path);

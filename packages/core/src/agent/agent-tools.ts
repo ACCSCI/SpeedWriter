@@ -12,6 +12,7 @@ import { assertSafeTruthFileName, createInteractionToolsFromDeps } from "../inte
 import { writeExportArtifact } from "../interaction/export-artifact.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../utils/book-id.js";
 import { safeChildPath } from "../utils/path-safety.js";
+import { parseBookRules, isRoleLocked } from "../models/book-rules.js";
 import { normalizePlatformId, normalizePlatformOrOther } from "../models/book.js";
 import { generateShortFictionCover, runShortFictionProduction } from "../pipeline/short-fiction-runner.js";
 import { createPlayDB, type PlayGraphDB } from "../play/play-db-factory.js";
@@ -1543,6 +1544,19 @@ function playEditEntityId(type: string, label: string): string {
 // 5. Deterministic writing tools
 // ---------------------------------------------------------------------------
 
+const SAFE_ROLE_RE = /^roles\/(主要角色|次要角色|major|minor)\/[^/\\]+\.md$/u;
+
+/**
+ * Read book_rules.md and return parsed role lock config, or null if unavailable.
+ */
+async function readRoleLock(projectRoot: string, bookId: string) {
+  const rulesPath = join(projectRoot, "books", bookId, "story", "book_rules.md");
+  const raw = await readFile(rulesPath, "utf-8").catch(() => null);
+  if (!raw) return null;
+  const parsed = parseBookRules(raw);
+  return parsed?.rules ?? null;
+}
+
 const WriteTruthFileParams = Type.Object({
   bookId: Type.Optional(Type.String({ description: "Book ID. Omit to use the active book." })),
   fileName: Type.String({ description: "Truth file path under story/. Prefer outline/story_frame.md, outline/volume_map.md, roles/major/<name>.md, roles/minor/<name>.md; flat files such as current_focus.md and author_intent.md are also supported." }),
@@ -1564,6 +1578,23 @@ export function createWriteTruthFileTool(
       try {
         const bookId = resolveToolBookId("write_truth_file", params.bookId, activeBookId);
         const fileName = assertSafeTruthFileName(params.fileName);
+
+        // Role lock enforcement
+        if (SAFE_ROLE_RE.test(fileName)) {
+          const rules = await readRoleLock(projectRoot, bookId);
+          const roleLock = rules?.roleLock;
+          if (roleLock) {
+            const targetPath = join(projectRoot, "books", bookId, "story", fileName);
+            const exists = await stat(targetPath).then(() => true).catch(() => false);
+            if (!exists && roleLock.preventAdd) {
+              return textResult(`role_lock_denied: 新增角色已被禁止 (preventAdd=true)。如需新增角色，请先在角色管理中关闭"禁止新增角色"。`);
+            }
+            if (exists && rules && isRoleLocked(rules, fileName)) {
+              return textResult(`role_lock_denied: 角色 "${fileName}" 已被锁定，禁止修改。如需修改，请先在角色管理中解锁该角色。`);
+            }
+          }
+        }
+
         await tools.writeTruthFile(bookId, fileName, params.content);
         return textResult(`Updated "${fileName}" for "${bookId}".`);
       } catch (err: any) {
@@ -1591,12 +1622,36 @@ export function createRenameEntityTool(
     label: "Rename Entity",
     parameters: RenameEntityParams,
     async execute(_toolCallId, params): Promise<AgentToolResult<undefined>> {
-      const bookId = resolveToolBookId("rename_entity", params.bookId, activeBookId);
-      const result = await tools.renameEntity(bookId, params.oldValue, params.newValue) as {
-        readonly __interaction?: { readonly responseText?: string };
-      };
-      const summary = result.__interaction?.responseText ?? `Renamed "${params.oldValue}" to "${params.newValue}" in "${bookId}".`;
-      return textResult(summary);
+      try {
+        const bookId = resolveToolBookId("rename_entity", params.bookId, activeBookId);
+
+        // Role lock enforcement: rename = edit + delete + add
+        const rules = await readRoleLock(projectRoot, bookId);
+        const roleLock = rules?.roleLock;
+        if (roleLock) {
+          if (roleLock.preventAdd || roleLock.preventDelete) {
+            return textResult(`role_lock_denied: 重命名角色被禁止（需要新增+删除权限）。请先在角色管理中关闭相关锁定。`);
+          }
+          // Check if the source role is locked
+          if (rules) {
+            const roleDirs = ["roles/主要角色", "roles/次要角色", "roles/major", "roles/minor"];
+            for (const dir of roleDirs) {
+              const candidate = `${dir}/${params.oldValue}.md`;
+              if (isRoleLocked(rules, candidate)) {
+                return textResult(`role_lock_denied: 角色 "${params.oldValue}" 已被锁定，禁止重命名。请先在角色管理中解锁该角色。`);
+              }
+            }
+          }
+        }
+
+        const result = await tools.renameEntity(bookId, params.oldValue, params.newValue) as {
+          readonly __interaction?: { readonly responseText?: string };
+        };
+        const summary = result.__interaction?.responseText ?? `Renamed "${params.oldValue}" to "${params.newValue}" in "${bookId}".`;
+        return textResult(summary);
+      } catch (err: any) {
+        return textResult(`rename_entity failed: ${err?.message ?? String(err)}`);
+      }
     },
   };
 }

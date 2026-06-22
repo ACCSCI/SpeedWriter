@@ -321,4 +321,73 @@ describe("buildAgentSystemPrompt", () => {
       expect(buildAgentSystemPrompt(null, "en", "play", { playWorldExists: false })).toContain("do not add filler");
     });
   });
+
+  describe("role lock rules", () => {
+    it("omits the role lock section when no roleLock is configured", () => {
+      const zhBook = buildAgentSystemPrompt("my-book", "zh", "book");
+      const enBook = buildAgentSystemPrompt("my-book", "en", "book");
+      const zhEdit = buildAgentSystemPrompt("my-book", "zh", "edit");
+      expect(zhBook).not.toContain("角色锁定规则");
+      expect(enBook).not.toContain("Role Lock Rules");
+      expect(zhEdit).not.toContain("角色锁定规则");
+    });
+
+    it("emits a Chinese role lock section in book mode when configured", () => {
+      const prompt = buildAgentSystemPrompt("my-book", "zh", "book", {
+        roleLock: {
+          preventAdd: true,
+          preventDelete: false,
+          lockedRoles: [
+            { path: "主要角色/林月.md", locked: true },
+            { path: "次要角色/王五.md", locked: false },
+          ],
+        },
+      });
+      expect(prompt).toContain("角色锁定规则");
+      expect(prompt).toContain("禁止创建新角色");
+      expect(prompt).toContain("## 角色锁定规则");
+      expect(prompt).toContain("- 主要角色/林月.md");
+      expect(prompt).toContain("请求用户解锁");
+    });
+
+    it("emits an English role lock section in book mode when configured", () => {
+      const prompt = buildAgentSystemPrompt("novel", "en", "book", {
+        roleLock: {
+          preventAdd: false,
+          preventDelete: true,
+          lockedRoles: [{ path: "major/lin.md", locked: true }],
+        },
+      });
+      expect(prompt).toContain("Role Lock Rules");
+      expect(prompt).toContain("disabled deleting roles");
+      expect(prompt).toContain("- major/lin.md");
+      expect(prompt).toContain("ask the user to unlock first");
+    });
+
+    it("emits the role lock section in edit mode when configured", () => {
+      const prompt = buildAgentSystemPrompt("my-book", "zh", "edit", {
+        roleLock: {
+          preventAdd: true,
+          preventDelete: true,
+          lockedRoles: [{ path: "主要角色/林月.md", locked: true }],
+        },
+      });
+      expect(prompt).toContain("角色锁定规则");
+      expect(prompt).toContain("禁止创建新角色");
+      expect(prompt).toContain("禁止删除角色");
+      expect(prompt).toContain("## 角色锁定规则");
+      expect(prompt).toContain("- 主要角色/林月.md");
+    });
+
+    it("does not emit the role lock section when roleLock has no active flags", () => {
+      const prompt = buildAgentSystemPrompt("my-book", "zh", "book", {
+        roleLock: {
+          preventAdd: false,
+          preventDelete: false,
+          lockedRoles: [{ path: "主要角色/林月.md", locked: false }],
+        },
+      });
+      expect(prompt).not.toContain("角色锁定规则");
+    });
+  });
 });

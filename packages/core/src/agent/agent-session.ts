@@ -50,6 +50,9 @@ import type { ActionPayload, ActionSource, RequestedIntent } from "../interactio
 import type { ContextCompressionCallback } from "../models/context-compression.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { PlayStore } from "../play/play-store.js";
+import { parseBookRules } from "../models/book-rules.js";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,6 +89,8 @@ export interface AgentSessionConfig {
   onEvent?: (event: AgentEvent) => void;
   /** Optional listener for context compression lifecycle events. */
   onContextCompression?: ContextCompressionCallback;
+  /** Optional AbortSignal to cancel the agent session externally. */
+  signal?: AbortSignal;
 }
 
 export interface AgentSessionResult {
@@ -819,10 +824,26 @@ async function runAgentSessionUnlocked(
         ? plainToAgentMessages(initialMessages)
         : [];
     let terminalToolResultTail = false;
+
+    // Read role lock config from book_rules.md for prompt injection
+    let roleLock: import("../models/book-rules.js").RoleLock | undefined;
+    if (bookId && (sessionKind === "book" || sessionKind === "edit")) {
+      try {
+        const rulesPath = join(projectRoot, "books", bookId, "story", "book_rules.md");
+        const raw = await readFile(rulesPath, "utf-8").catch(() => null);
+        if (raw) {
+          const parsed = parseBookRules(raw);
+          roleLock = parsed?.rules.roleLock ?? undefined;
+        }
+      } catch {
+        // Ignore errors — lock prompt is best-effort
+      }
+    }
+
     const agent = new Agent({
       initialState: {
         model,
-        systemPrompt: buildAgentSystemPrompt(bookId, language, sessionKind, { actionSource, requestedIntent, playWorldExists }),
+        systemPrompt: buildAgentSystemPrompt(bookId, language, sessionKind, { actionSource, requestedIntent, playWorldExists, roleLock }),
         tools: createAgentToolsForMode({
           pipeline,
           bookId,
@@ -956,6 +977,17 @@ async function runAgentSessionUnlocked(
     onEvent?.(event);
   });
 
+  // ----- Wire up external abort signal -----
+  if (config.signal) {
+    if (config.signal.aborted) {
+      agent.abort();
+    } else {
+      config.signal.addEventListener("abort", () => {
+        agent.abort();
+      }, { once: true });
+    }
+  }
+
   // ----- Execute the turn -----
   let finalAssistant: AssistantMessage | undefined;
   let errorMessage: string | undefined;
@@ -1020,6 +1052,12 @@ async function runAgentSessionUnlocked(
 // ---------------------------------------------------------------------------
 // Cache management
 // ---------------------------------------------------------------------------
+
+/** Get the cached Agent instance for a session, if any. */
+export function getAgentForSession(projectRoot: string, sessionId: string): Agent | undefined {
+  const cacheKey = agentCacheKey(projectRoot, sessionId);
+  return agentCache.get(cacheKey)?.agent;
+}
 
 /** Manually evict a cached Agent session. */
 export function evictAgentCache(sessionId: string): boolean {

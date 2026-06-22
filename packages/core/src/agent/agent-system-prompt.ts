@@ -1,10 +1,12 @@
 import type { SessionKind } from "../interaction/session.js";
 import type { ActionSource, RequestedIntent } from "../interaction/action-envelope.js";
+import type { RoleLock } from "../models/book-rules.js";
 
 export interface AgentSystemPromptOptions {
   readonly actionSource?: ActionSource;
   readonly requestedIntent?: RequestedIntent;
   readonly playWorldExists?: boolean;
+  readonly roleLock?: RoleLock;
 }
 
 function isConfirmedAction(
@@ -13,6 +15,35 @@ function isConfirmedAction(
 ): boolean {
   return (options?.actionSource === "button" || options?.actionSource === "slash")
     && options.requestedIntent === intent;
+}
+
+function buildRoleLockSection(roleLock: RoleLock | undefined, isZh: boolean): string {
+  if (!roleLock) return "";
+  const { preventAdd, preventDelete, lockedRoles } = roleLock;
+  const locked = lockedRoles.filter((r) => r.locked);
+  if (!preventAdd && !preventDelete && locked.length === 0) return "";
+
+  const lines: string[] = [];
+  if (isZh) {
+    lines.push("## 角色锁定规则");
+    if (preventAdd) lines.push("- 用户已禁止创建新角色。不要尝试使用 write_truth_file 创建新的角色文件。");
+    if (preventDelete) lines.push("- 用户已禁止删除角色。不要尝试删除任何角色文件。");
+    if (locked.length > 0) {
+      lines.push("- 以下角色已被锁定，禁止修改其任何内容（性格、动机、关系、当前状态等）：");
+      for (const r of locked) lines.push(`  - ${r.path}`);
+    }
+    lines.push("- 如需修改锁定角色或新增/删除角色，请先请求用户解锁。");
+  } else {
+    lines.push("## Role Lock Rules");
+    if (preventAdd) lines.push("- The user has disabled creating new roles. Do not attempt to use write_truth_file to create new role files.");
+    if (preventDelete) lines.push("- The user has disabled deleting roles. Do not attempt to delete any role files.");
+    if (locked.length > 0) {
+      lines.push("- The following roles are locked; do not modify their content (personality, motive, relationship, current state, etc.):");
+      for (const r of locked) lines.push(`  - ${r.path}`);
+    }
+    lines.push("- To modify a locked role or add/delete roles, ask the user to unlock first.");
+  }
+  return lines.join("\n");
 }
 
 function commonOutputRules(isZh: boolean): string {
@@ -247,8 +278,9 @@ ${commonOutputRules(true)}`
 ${commonOutputRules(false)}`;
 }
 
-function buildEditPrompt(bookId: string | null, isZh: boolean): string {
+function buildEditPrompt(bookId: string | null, isZh: boolean, roleLock?: RoleLock): string {
   const name = bookId ?? "";
+  const lockSection = buildRoleLockSection(roleLock, isZh);
   return isZh
     ? `你是 InkOS 外部编辑助手。当前入口只处理用户明确要求的内容修改。
 
@@ -269,6 +301,8 @@ ${bookId ? `当前书籍：${name}` : "当前没有绑定书籍；如果用户�
 - 只处理明确编辑，不主动写新章节，不创建新书，不生成短篇，不启动互动世界。
 - 用户没有说清文件、章节、旧文本或新文本时，先问清楚。
 - 如果是整章重写、继续写、审稿这类创作流程，请让用户切回当前书写作入口。
+
+${lockSection}
 
 ${commonOutputRules(true)}`
     : `You are the InkOS external editing assistant. This surface only handles explicit content edits.
@@ -291,10 +325,12 @@ ${bookId ? `Active book: ${name}` : "No book is bound; ask for the file or proje
 - If the file, chapter, old text, or new text is unclear, ask one clarifying question.
 - For whole-chapter rewrite, continuation, or audit workflows, ask the user to switch back to the active book writing surface.
 
+${lockSection}
+
 ${commonOutputRules(false)}`;
 }
 
-function buildBookPrompt(bookId: string, isZh: boolean): string {
+function buildBookPrompt(bookId: string, isZh: boolean, roleLock?: RoleLock): string {
   return isZh
     ? `你是 InkOS 写作助手，当前正在处理书籍「${bookId}」。
 
@@ -348,6 +384,8 @@ function buildBookPrompt(bookId: string, isZh: boolean): string {
 章节索引在 \`books/${bookId}/chapters/index.json\`；章节文件在 \`books/${bookId}/chapters/\`，命名格式为 \`0001_标题.md\`。
 
 如果索引和磁盘文件不一致，先说明不一致和建议修复方式；不要直接修改 index.json。
+
+${buildRoleLockSection(roleLock, true)}
 
 ${commonOutputRules(true)}`
     : `You are the InkOS writing assistant, working on book "${bookId}".
@@ -403,6 +441,8 @@ The chapter index is at \`books/${bookId}/chapters/index.json\`; chapter files a
 
 If the index and files disagree, explain the inconsistency and suggested repair first; do not directly modify index.json.
 
+${buildRoleLockSection(roleLock, false)}
+
 ${commonOutputRules(false)}`;
 }
 
@@ -424,7 +464,7 @@ export function buildAgentSystemPrompt(
     return buildShortPrompt(isZh, confirmedIntent);
   }
   if (sessionKind === "play") return buildPlayPrompt(isZh, isConfirmedAction(options, "play_start"), options.playWorldExists === true);
-  if (sessionKind === "edit") return buildEditPrompt(bookId, isZh);
-  if (sessionKind === "book" && bookId) return buildBookPrompt(bookId, isZh);
+  if (sessionKind === "edit") return buildEditPrompt(bookId, isZh, options.roleLock);
+  if (sessionKind === "book" && bookId) return buildBookPrompt(bookId, isZh, options.roleLock);
   return buildChatPrompt(isZh);
 }
