@@ -38,6 +38,7 @@ export const STUDIO_SSE_EVENTS = [
   "style:complete",
   "style:error",
   "import:start",
+  "import:progress",
   "import:complete",
   "import:error",
   "fanfic:start",

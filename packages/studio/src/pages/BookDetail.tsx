@@ -105,9 +105,13 @@ export function BookDetail({
   const [revisingChapters, setRevisingChapters] = useState<ReadonlyArray<number>>([]);
   const [syncingChapters, setSyncingChapters] = useState<ReadonlyArray<number>>([]);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsTitle, setSettingsTitle] = useState<string | null>(null);
+  const [settingsGenre, setSettingsGenre] = useState<string | null>(null);
+  const [settingsPlatform, setSettingsPlatform] = useState<string | null>(null);
   const [settingsWordCount, setSettingsWordCount] = useState<number | null>(null);
   const [settingsTargetChapters, setSettingsTargetChapters] = useState<number | null>(null);
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
+  const [confirmDeleteChapter, setConfirmDeleteChapter] = useState<number | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
@@ -273,6 +277,9 @@ export function BookDetail({
     setSavingSettings(true);
     try {
       const body: Record<string, unknown> = {};
+      if (settingsTitle !== null) body.title = settingsTitle;
+      if (settingsGenre !== null) body.genre = settingsGenre;
+      if (settingsPlatform !== null) body.platform = settingsPlatform;
       if (settingsWordCount !== null) body.chapterWordCount = settingsWordCount;
       if (settingsTargetChapters !== null) body.targetChapters = settingsTargetChapters;
       if (settingsStatus !== null) body.status = settingsStatus;
@@ -286,6 +293,20 @@ export function BookDetail({
       alert(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleDeleteChapter = async (chapterNum: number) => {
+    setConfirmDeleteChapter(null);
+    try {
+      const res = await fetch(`/api/v1/books/${bookId}/chapters/${chapterNum}`, { method: "DELETE" });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error((json as { error?: string }).error ?? `${res.status}`);
+      }
+      refetch();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Delete failed");
     }
   };
 
@@ -429,6 +450,9 @@ export function BookDetail({
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount ?? 0), 0);
   const reviewCount = chapters.filter((ch) => ch.status === "ready-for-review").length;
 
+  const currentTitle = settingsTitle ?? book.title;
+  const currentGenre = settingsGenre ?? book.genre;
+  const currentPlatform = settingsPlatform ?? (book as Record<string, unknown>).platform ?? "other";
   const currentWordCount = settingsWordCount ?? book.chapterWordCount;
   const currentTargetChapters = settingsTargetChapters ?? book.targetChapters ?? 0;
   const currentStatus = settingsStatus ?? (book.status as BookStatus);
@@ -646,6 +670,40 @@ export function BookDetail({
         <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">{t("book.settings")}</h2>
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Title</label>
+            <input
+              type="text"
+              value={currentTitle}
+              onChange={(e) => setSettingsTitle(e.target.value)}
+              className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-48"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Genre</label>
+            <input
+              type="text"
+              value={currentGenre}
+              onChange={(e) => setSettingsGenre(e.target.value)}
+              className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-36"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Platform</label>
+            <select
+              value={String(currentPlatform)}
+              onChange={(e) => setSettingsPlatform(e.target.value)}
+              className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50"
+            >
+              <option value="other">Other</option>
+              <option value="tomato">番茄小说</option>
+              <option value="qidian">起点中文网</option>
+              <option value="feilu">飞卢</option>
+              <option value="royal-road">Royal Road</option>
+              <option value="kindle-unlimited">Kindle Unlimited</option>
+              <option value="scribble-hub">Scribble Hub</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
             <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.wordsPerChapter")}</label>
             <input
               type="number"
@@ -812,6 +870,13 @@ export function BookDetail({
                         <option value="rework">{t("book.rework")}</option>
                         <option value="anti-detect">{t("book.antiDetect")}</option>
                       </select>
+                      <button
+                        onClick={() => setConfirmDeleteChapter(ch.number)}
+                        className="p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-all shadow-sm"
+                        title={t("common.delete")}
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -842,6 +907,21 @@ export function BookDetail({
         variant="danger"
         onConfirm={handleDeleteBook}
         onCancel={() => setConfirmDeleteOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteChapter !== null}
+        title={t("common.delete")}
+        message={
+          data?.book.language === "en"
+            ? `Delete chapter ${confirmDeleteChapter}? This cannot be undone.`
+            : `删除第 ${confirmDeleteChapter} 章？此操作不可撤销。`
+        }
+        confirmLabel={t("common.delete")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        onConfirm={() => handleDeleteChapter(confirmDeleteChapter!)}
+        onCancel={() => setConfirmDeleteChapter(null)}
       />
     </div>
   );

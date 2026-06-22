@@ -32,6 +32,7 @@ import {
   Check,
   Gamepad2,
   Palette,
+  Square,
 } from "lucide-react";
 import { Shimmer } from "../components/ai-elements/shimmer";
 import {
@@ -138,12 +139,18 @@ const AssistantMessageParts = memo(function AssistantMessageParts({
   parts,
   timestamp,
   theme,
+  aborted,
+  isZh,
+  onContinue,
   onProposedAction,
   onRejectProposedAction,
 }: {
   readonly parts: ReadonlyArray<MessagePart>;
   readonly timestamp: number;
   readonly theme: Theme;
+  readonly aborted?: boolean;
+  readonly isZh?: boolean;
+  readonly onContinue?: () => void;
   readonly onProposedAction?: (details: ProposedActionDetails) => void;
   readonly onRejectProposedAction?: (details: ProposedActionDetails) => void;
 }) {
@@ -180,6 +187,9 @@ const AssistantMessageParts = memo(function AssistantMessageParts({
               content={item.part.content}
               timestamp={timestamp}
               theme={theme}
+              aborted={aborted}
+              isZh={isZh}
+              onContinue={onContinue}
             />
           );
         }
@@ -203,6 +213,7 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   // -- Store actions --
   const setInput = useChatStore((s) => s.setInput);
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const abortGeneration = useChatStore((s) => s.abortGeneration);
   const setSelectedModel = useChatStore((s) => s.setSelectedModel);
   const loadSessionList = useChatStore((s) => s.loadSessionList);
   const createSession = useChatStore((s) => s.createSession);
@@ -638,13 +649,22 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
               <div key={`${msg.timestamp}-${i}`}>
                 {msg.role === "user" ? (
                   /* User message */
-                  <ChatMessage role="user" content={msg.content} timestamp={msg.timestamp} theme={theme} />
+                  <ChatMessage role="user" content={msg.content} timestamp={msg.timestamp} theme={theme} isZh={isZh} />
                 ) : msg.parts && msg.parts.length > 0 ? (
                   /* Assistant message — parts-based rendering (chronological) */
                   <AssistantMessageParts
                     parts={msg.parts}
                     timestamp={msg.timestamp}
                     theme={theme}
+                    aborted={msg.aborted}
+                    isZh={isZh}
+                    onContinue={msg.aborted && activeSessionId ? () => {
+                      void sendMessage(activeSessionId, "继续", {
+                        activeBookId,
+                        sessionKind: currentSessionKind,
+                        actionSource: "free-text",
+                      });
+                    } : undefined}
                     onProposedAction={handleProposedAction}
                     onRejectProposedAction={handleRejectProposedAction}
                   />
@@ -655,6 +675,15 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                     content={msg.content}
                     timestamp={msg.timestamp}
                     theme={theme}
+                    aborted={msg.aborted}
+                    isZh={isZh}
+                    onContinue={msg.aborted && activeSessionId ? () => {
+                      void sendMessage(activeSessionId, "继续", {
+                        activeBookId,
+                        sessionKind: currentSessionKind,
+                        actionSource: "free-text",
+                      });
+                    } : undefined}
                   />
                 )}
               </div>
@@ -724,11 +753,21 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                 />
                 <button
                   type="button"
-                  onClick={() => onSend(input)}
-                  disabled={!input.trim() || loading || !activeSessionId}
-                  className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-all disabled:opacity-20 disabled:scale-100 shadow-sm shadow-primary/20"
+                  onClick={() => {
+                    if (loading && activeSessionId) {
+                      void abortGeneration(activeSessionId);
+                    } else {
+                      onSend(input);
+                    }
+                  }}
+                  disabled={(!input.trim() && !loading) || !activeSessionId}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-all disabled:opacity-20 disabled:scale-100 shadow-sm ${
+                    loading
+                      ? "bg-red-500 text-white hover:bg-red-600 shadow-red-500/20"
+                      : "bg-primary text-primary-foreground shadow-primary/20"
+                  }`}
                 >
-                  {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={14} strokeWidth={2.5} />}
+                  {loading ? <Square size={14} /> : <ArrowUp size={14} strokeWidth={2.5} />}
                 </button>
               </div>
               <div className="flex items-center gap-2 px-3 pb-2 border-t border-border/20 pt-1.5">

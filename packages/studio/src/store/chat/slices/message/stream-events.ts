@@ -438,6 +438,30 @@ export function attachSessionStreamListeners({
     }
   });
 
+  streamEs.addEventListener("agent:aborted", (event: MessageEvent) => {
+    try {
+      const data = event.data ? JSON.parse(event.data) : null;
+      if (!sessionMatchesEvent(sessionId, data)) return;
+      flushTextDeltas();
+      // Update the streaming message with aborted marker
+      set((state) => ({
+        sessions: updateSession(state.sessions, sessionId, (runtime) => {
+          const lastMsg = runtime.messages[runtime.messages.length - 1];
+          if (!lastMsg || lastMsg.role !== "assistant") return {};
+          return {
+            messages: [
+              ...runtime.messages.slice(0, -1),
+              { ...lastMsg, aborted: true },
+            ],
+            isStreaming: false,
+          };
+        }),
+      }));
+    } catch {
+      // ignore
+    }
+  });
+
   streamEs.addEventListener("context:compression", (event: MessageEvent) => {
     try {
       const data = event.data ? JSON.parse(event.data) as ContextCompressionEventPayload : null;

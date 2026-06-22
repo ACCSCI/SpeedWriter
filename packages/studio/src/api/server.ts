@@ -22,6 +22,7 @@ import {
   migrateBookSession,
   SessionAlreadyMigratedError,
   runAgentSession,
+  getAgentForSession,
   resolveServicePreset,
   resolveServiceProviderFamily,
   resolveServiceModelsBaseUrl,
@@ -1873,6 +1874,41 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     return c.json({ status: "creating", bookId });
   });
 
+  // --- Book Create Bare (for import flow — no architect pipeline) ---
+
+  app.post("/api/v1/books/create-bare", async (c) => {
+    const body = await c.req.json<{
+      title: string;
+      genre: string;
+      language?: string;
+      platform?: string;
+      chapterWordCount?: number;
+      targetChapters?: number;
+    }>();
+
+    const now = new Date().toISOString();
+    const bookConfig = buildStudioBookConfig(body, now);
+    const bookId = bookConfig.id;
+    const bookDir = state.bookDir(bookId);
+
+    if (!bookId) {
+      return c.json({ error: "Could not derive a valid book id from title" }, 400);
+    }
+    if (await completeBookExists(bookDir)) {
+      return c.json({ error: `Book "${bookId}" already exists` }, 409);
+    }
+
+    // Create book directory structure without running architect
+    const { mkdir: mkdirFs, writeFile: writeFileFs } = await import("node:fs/promises");
+    await mkdirFs(join(bookDir, "chapters"), { recursive: true });
+    await mkdirFs(join(bookDir, "story"), { recursive: true });
+    await writeFileFs(join(bookDir, "book.json"), JSON.stringify(bookConfig, null, 2), "utf-8");
+    await state.saveChapterIndex(bookId, []);
+
+    broadcast("book:created", { bookId, book: bookConfig });
+    return c.json({ bookId });
+  });
+
   app.get("/api/v1/books/:id/create-status", async (c) => {
     const id = c.req.param("id");
     const status = bookCreateStatus.get(id);
@@ -1927,6 +1963,83 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
       const { writeFile: writeFileFs } = await import("node:fs/promises");
       await writeFileFs(join(chaptersDir, match), content, "utf-8");
+      return c.json({ ok: true, chapterNumber: num });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Chapter New ---
+
+  app.post("/api/v1/books/:id/chapters/new", async (c) => {
+    const id = c.req.param("id");
+    const bookDir = state.bookDir(id);
+    const chaptersDir = join(bookDir, "chapters");
+
+    try {
+      const nextChapter = await state.getNextChapterNumber(id);
+      const padded = String(nextChapter).padStart(4, "0");
+      const filename = `${padded}_chapter_${nextChapter}.md`;
+      const content = `# 第${nextChapter}章\n\n`;
+
+      const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
+      await mkdirFs(chaptersDir, { recursive: true });
+      await writeFileFs(join(chaptersDir, filename), content, "utf-8");
+
+      // Update chapter index
+      const index = await state.loadChapterIndex(id);
+      const now = new Date().toISOString();
+      const newEntry = {
+        number: nextChapter,
+        title: `第${nextChapter}章`,
+        status: "drafted" as const,
+        wordCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        auditIssues: [] as string[],
+        lengthWarnings: [] as string[],
+      };
+      await state.saveChapterIndex(id, [...index, newEntry]);
+
+      broadcast("chapter:created", { bookId: id, chapterNumber: nextChapter });
+      return c.json({ ok: true, chapterNumber: nextChapter, filename });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Chapter Delete ---
+
+  app.delete("/api/v1/books/:id/chapters/:num", async (c) => {
+    const id = c.req.param("id");
+    const num = parseInt(c.req.param("num"), 10);
+    const bookDir = state.bookDir(id);
+    const chaptersDir = join(bookDir, "chapters");
+
+    try {
+      const files = await readdir(chaptersDir);
+      const paddedNum = String(num).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const { rm } = await import("node:fs/promises");
+      await rm(join(chaptersDir, match), { force: true });
+
+      // Update chapter index
+      const index = await state.loadChapterIndex(id);
+      const updated = index.filter((ch) => ch.number !== num);
+      await state.saveChapterIndex(id, updated);
+
+      // Clean up runtime snapshot for this chapter
+      const runtimeDir = join(bookDir, "story", "runtime");
+      const runtimeFiles = await readdir(runtimeDir).catch(() => []);
+      await Promise.all(
+        runtimeFiles
+          .filter((f) => f.startsWith(`chapter-${paddedNum}.`))
+          .map((f) => rm(join(runtimeDir, f), { force: true })),
+      );
+
+      broadcast("chapter:deleted", { bookId: id, chapterNumber: num });
       return c.json({ ok: true, chapterNumber: num });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
@@ -3903,6 +4016,25 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     }
   });
 
+  // --- Agent abort ---
+
+  app.post("/api/v1/agent/:sessionId/abort", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const agent = getAgentForSession(root, sessionId);
+
+    if (!agent) {
+      return c.json({ ok: true, message: "No active agent for this session" });
+    }
+
+    // Abort the current agent run
+    agent.abort();
+
+    // Broadcast abort event so frontend can update UI
+    broadcast("agent:aborted", { sessionId });
+
+    return c.json({ ok: true });
+  });
+
   // --- Language setup ---
 
   app.post("/api/v1/project/language", async (c) => {
@@ -4159,6 +4291,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   // --- Truth file edit ---
 
+  // Legacy shim → authoritative path mapping for dual-write.
+  const LEGACY_TO_AUTHORITATIVE: Record<string, string> = {
+    "story_bible.md": "outline/story_frame.md",
+    "book_rules.md": "outline/story_frame.md",
+  };
+
+  const SAFE_ROLE_RE = /^roles\/(主要角色|次要角色|major|minor)\/[^/\\]+\.md$/u;
+
+  /**
+   * Read role lock config from book_rules.md. Returns null if unavailable.
+   */
+  async function readRoleLockConfig(bookDir: string) {
+    try {
+      const { tryParseBookRulesFrontmatter } = await import("@actalk/inkos-core");
+      const rulesPath = join(bookDir, "story", "book_rules.md");
+      const raw = await readFile(rulesPath, "utf-8").catch(() => null);
+      if (!raw) return null;
+      const parsed = tryParseBookRulesFrontmatter(raw);
+      return parsed?.rules.roleLock ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   app.put("/api/v1/books/:id/truth/:file{.+}", async (c) => {
     const id = c.req.param("id");
     const file = c.req.param("file");
@@ -4167,27 +4323,82 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);
     }
-    // Legacy pointer shims are read-only in new-layout books: writing
-    // story_bible.md or book_rules.md does nothing at runtime (the pipeline
-    // reads outline/ instead). For pre-Phase-5 books these ARE authoritative.
-    if (LEGACY_SHIM_FILES.has(file)) {
-      const { isNewLayoutBook } = await import("@actalk/inkos-core");
-      if (await isNewLayoutBook(bookDir)) {
-        return c.json(
-          { error: "Legacy compat shim; edit outline/story_frame.md instead" },
-          400,
-        );
-      }
-    }
     if (RUNTIME_DIAGNOSTIC_FILE_RE.test(file)) {
       return c.json({ error: "Runtime diagnostic files are read-only" }, 400);
     }
+
+    // Role lock enforcement for role files (book_rules.md itself is exempt)
+    if (SAFE_ROLE_RE.test(file)) {
+      const roleLock = await readRoleLockConfig(bookDir);
+      if (roleLock) {
+        const { stat: statFs } = await import("node:fs/promises");
+        const exists = await statFs(resolved).then(() => true).catch(() => false);
+        if (!exists && roleLock.preventAdd) {
+          return c.json({ error: "角色锁定：新增角色已被禁止" }, 403);
+        }
+        if (exists) {
+          const entry = roleLock.lockedRoles.find(
+            (r) => r.locked && (r.path === file || file.endsWith(r.path)),
+          );
+          if (entry) {
+            return c.json({ error: `角色锁定：${file} 已被锁定，禁止修改` }, 403);
+          }
+        }
+      }
+    }
+
     const { content } = await c.req.json<{ content: string }>();
     const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
     const { dirname: dirnameFs } = await import("node:path");
     await mkdirFs(dirnameFs(resolved), { recursive: true });
     await writeFileFs(resolved, content, "utf-8");
+
+    // Dual-write: when editing a legacy shim on a new-layout book,
+    // also write to the authoritative path so the runtime picks it up.
+    const authoritativeRel = LEGACY_TO_AUTHORITATIVE[file];
+    if (authoritativeRel) {
+      const { isNewLayoutBook } = await import("@actalk/inkos-core");
+      if (await isNewLayoutBook(bookDir)) {
+        const authoritativeResolved = resolveTruthFilePath(bookDir, authoritativeRel);
+        if (authoritativeResolved) {
+          await mkdirFs(dirnameFs(authoritativeResolved), { recursive: true });
+          await writeFileFs(authoritativeResolved, content, "utf-8");
+        }
+      }
+    }
+
     return c.json({ ok: true });
+  });
+
+  // --- Truth file delete ---
+
+  app.delete("/api/v1/books/:id/truth/:file{.+}", async (c) => {
+    const id = c.req.param("id");
+    const file = c.req.param("file");
+    const bookDir = state.bookDir(id);
+    const resolved = resolveTruthFilePath(bookDir, file);
+    if (!resolved) {
+      return c.json({ error: "Invalid truth file" }, 400);
+    }
+    if (RUNTIME_DIAGNOSTIC_FILE_RE.test(file)) {
+      return c.json({ error: "Runtime diagnostic files cannot be deleted" }, 400);
+    }
+
+    // Role lock enforcement: preventDelete
+    if (SAFE_ROLE_RE.test(file)) {
+      const roleLock = await readRoleLockConfig(bookDir);
+      if (roleLock?.preventDelete) {
+        return c.json({ error: "角色锁定：删除角色已被禁止" }, 403);
+      }
+    }
+
+    try {
+      const { rm } = await import("node:fs/promises");
+      await rm(resolved, { force: true });
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
   });
 
   // =============================================
@@ -4214,6 +4425,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
   app.put("/api/v1/books/:id", async (c) => {
     const id = c.req.param("id");
     const updates = await c.req.json<{
+      title?: string;
+      genre?: string;
+      platform?: string;
       chapterWordCount?: number;
       targetChapters?: number;
       status?: string;
@@ -4223,6 +4437,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
       const book = await state.loadBookConfig(id);
       const updated = {
         ...book,
+        ...(updates.title !== undefined ? { title: updates.title.trim() } : {}),
+        ...(updates.genre !== undefined ? { genre: updates.genre.trim() } : {}),
+        ...(updates.platform !== undefined ? { platform: updates.platform as typeof book.platform } : {}),
         ...(updates.chapterWordCount !== undefined ? { chapterWordCount: Number(updates.chapterWordCount) } : {}),
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
         ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
@@ -4458,16 +4675,39 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
 
   app.post("/api/v1/books/:id/import/chapters", async (c) => {
     const id = c.req.param("id");
-    const { text, splitRegex } = await c.req.json<{ text: string; splitRegex?: string }>();
-    if (!text?.trim()) return c.json({ error: "text is required" }, 400);
+    const body = await c.req.json<{
+      text?: string;
+      splitRegex?: string;
+      chapters?: ReadonlyArray<{ title: string; content: string }>;
+    }>();
+
+    let chapters: ReadonlyArray<{ title: string; content: string }>;
+
+    if (body.chapters && body.chapters.length > 0) {
+      // Direct chapters array mode (from file upload)
+      chapters = body.chapters;
+    } else if (body.text?.trim()) {
+      // Auto-split mode (from pasted text)
+      const { splitChapters } = await import("@actalk/inkos-core");
+      chapters = [...splitChapters(body.text, body.splitRegex)];
+    } else {
+      return c.json({ error: "Either text or chapters array is required" }, 400);
+    }
+
+    if (chapters.length === 0) {
+      return c.json({ error: "No chapters found" }, 400);
+    }
 
     broadcast("import:start", { bookId: id, type: "chapters" });
     try {
-      const { splitChapters } = await import("@actalk/inkos-core");
-      const chapters = [...splitChapters(text, splitRegex)];
-
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.importChapters({ bookId: id, chapters });
+      const pipelineConfig = await buildPipelineConfig();
+      const pipeline = new PipelineRunner({
+        ...pipelineConfig,
+        onImportProgress: (event) => {
+          broadcast("import:progress", { bookId: id, ...event });
+        },
+      });
+      const result = await pipeline.importChapters({ bookId: id, chapters: [...chapters] });
       broadcast("import:complete", { bookId: id, type: "chapters", count: result.importedCount });
       return c.json(result);
     } catch (e) {

@@ -484,4 +484,27 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }));
     }
   },
+
+  abortGeneration: async (sessionId: string) => {
+    const session = get().sessions[sessionId];
+    if (!session?.isStreaming) return;
+
+    // Close the SSE stream
+    session.stream?.close();
+
+    // Call the server abort endpoint
+    try {
+      await fetchJson(`/agent/${sessionId}/abort`, { method: "POST" });
+    } catch {
+      // Ignore errors - frontend state will be updated regardless
+    }
+
+    // Immediately update frontend state
+    set((state) => ({
+      sessions: updateSession(state.sessions, sessionId, (runtime) => ({
+        isStreaming: false,
+        stream: null,
+      })),
+    }));
+  },
 });

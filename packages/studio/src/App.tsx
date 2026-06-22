@@ -260,7 +260,7 @@ function AppInner() {
           )}
           {route.page === "import" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <ImportManager nav={nav} theme={theme} t={t} initialTab={route.tab} />
+              <ImportManager nav={nav} theme={theme} t={t} initialTab={route.tab} sse={sse} />
             </div>
           )}
           {route.page === "radar" && (

@@ -657,6 +657,195 @@ describe("createStudioServer daemon lifecycle", () => {
     );
   });
 
+  it("blocks PUT on a missing role file when roleLock.preventAdd is true", async () => {
+    const bookDir = join(root, "books", "lock-add-book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(join(storyDir, "roles", "主要角色"), { recursive: true });
+    await writeFile(
+      join(storyDir, "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: true
+  preventDelete: false
+  lockedRoles: []
+---
+`,
+      "utf-8",
+    );
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request(
+      "http://localhost/api/v1/books/lock-add-book/truth/roles/主要角色/新增角色.md",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "# 新增角色\n" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("新增角色已被禁止"),
+    });
+    await expect(
+      access(join(storyDir, "roles", "主要角色", "新增角色.md")),
+    ).rejects.toThrow();
+  });
+
+  it("blocks PUT on an existing role file when the path is locked", async () => {
+    const bookDir = join(root, "books", "lock-edit-book");
+    const storyDir = join(bookDir, "story");
+    const rolePath = join(storyDir, "roles", "主要角色", "林月.md");
+    await mkdir(join(storyDir, "roles", "主要角色"), { recursive: true });
+    await writeFile(rolePath, "# 林月\n\n守住码头账册。\n", "utf-8");
+    await writeFile(
+      join(storyDir, "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: false
+  preventDelete: false
+  lockedRoles:
+    - path: "主要角色/林月.md"
+      locked: true
+---
+`,
+      "utf-8",
+    );
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request(
+      "http://localhost/api/v1/books/lock-edit-book/truth/roles/主要角色/林月.md",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "# 林月\n\n偷偷改写。\n" }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("已被锁定"),
+    });
+    await expect(readFile(rolePath, "utf-8")).resolves.toContain("守住码头账册");
+  });
+
+  it("blocks DELETE on a role file when roleLock.preventDelete is true", async () => {
+    const bookDir = join(root, "books", "lock-delete-book");
+    const storyDir = join(bookDir, "story");
+    const rolePath = join(storyDir, "roles", "次要角色", "王五.md");
+    await mkdir(join(storyDir, "roles", "次要角色"), { recursive: true });
+    await writeFile(rolePath, "# 王五\n", "utf-8");
+    await writeFile(
+      join(storyDir, "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: false
+  preventDelete: true
+  lockedRoles: []
+---
+`,
+      "utf-8",
+    );
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request(
+      "http://localhost/api/v1/books/lock-delete-book/truth/roles/次要角色/王五.md",
+      { method: "DELETE" },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("删除角色已被禁止"),
+    });
+    await expect(readFile(rolePath, "utf-8")).resolves.toContain("王五");
+  });
+
+  it("still allows PUT and DELETE on role files when the lock config has no active flags", async () => {
+    const bookDir = join(root, "books", "lock-passive-book");
+    const storyDir = join(bookDir, "story");
+    const rolePath = join(storyDir, "roles", "主要角色", "林月.md");
+    await mkdir(join(storyDir, "roles", "主要角色"), { recursive: true });
+    await writeFile(rolePath, "# 林月\n\n守住码头账册。\n", "utf-8");
+    await writeFile(
+      join(storyDir, "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: false
+  preventDelete: false
+  lockedRoles: []
+---
+`,
+      "utf-8",
+    );
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const edit = await app.request(
+      "http://localhost/api/v1/books/lock-passive-book/truth/roles/主要角色/林月.md",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "# 林月\n\n新内容。\n" }),
+      },
+    );
+    expect(edit.status).toBe(200);
+    await expect(readFile(rolePath, "utf-8")).resolves.toContain("新内容");
+
+    const del = await app.request(
+      "http://localhost/api/v1/books/lock-passive-book/truth/roles/主要角色/林月.md",
+      { method: "DELETE" },
+    );
+    expect(del.status).toBe(200);
+    await expect(access(rolePath)).rejects.toThrow();
+  });
+
+  it("does not apply role lock rules to non-role truth files", async () => {
+    const bookDir = join(root, "books", "lock-other-book");
+    const storyDir = join(bookDir, "story");
+    await mkdir(storyDir, { recursive: true });
+    const focusPath = join(storyDir, "current_focus.md");
+    await writeFile(focusPath, "# Focus\n", "utf-8");
+    await writeFile(
+      join(storyDir, "book_rules.md"),
+      `---
+version: "1.0"
+roleLock:
+  preventAdd: true
+  preventDelete: true
+  lockedRoles:
+    - path: "主要角色/林月.md"
+      locked: true
+---
+`,
+      "utf-8",
+    );
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const update = await app.request(
+      "http://localhost/api/v1/books/lock-other-book/truth/current_focus.md",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "# Focus\n\nnew\n" }),
+      },
+    );
+    expect(update.status).toBe(200);
+    await expect(readFile(focusPath, "utf-8")).resolves.toContain("new");
+  });
+
   it("exposes runtime context trace files as read-only truth diagnostics", async () => {
     const bookDir = join(root, "books", "trace-book");
     const storyDir = join(bookDir, "story");

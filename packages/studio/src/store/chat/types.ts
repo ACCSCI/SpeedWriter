@@ -50,6 +50,7 @@ export interface Message {
   readonly toolCall?: ToolCall;
   readonly toolExecutions?: ToolExecution[];
   readonly parts?: MessagePart[];              // chronological parts for interleaved rendering
+  readonly aborted?: boolean;                  // true if generation was aborted by user
 }
 
 export interface SessionMessage {
@@ -182,6 +183,7 @@ export interface MessageActions {
   deleteSession: (sessionId: string) => Promise<void>;
   loadSessionDetail: (sessionId: string) => Promise<void>;
   sendMessage: (sessionId: string, text: string, options?: SendMessageOptions) => Promise<void>;
+  abortGeneration: (sessionId: string) => Promise<void>;
   setSelectedModel: (model: string, service: string) => void;
 }
 
